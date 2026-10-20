@@ -102,7 +102,7 @@ pub struct PlaceWrite {
 /// Write a Places tag and the IPTC location fields into `image_path`'s sidecar.
 ///
 /// Returns whether bytes were actually written. A photo that already carries a
-/// finished `Places/*` tag is left alone (`false`). A *strict prefix*
+/// finished `Places/…` tag is left alone (`false`). A *strict prefix*
 /// (`Places/France` → `Places/France/…/Paris`) is upgraded.
 ///
 /// Concurrent sidecar writes retry a handful of times: tagging or a face

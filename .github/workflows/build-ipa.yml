@@ -17,10 +17,15 @@ env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: "0"
   XCODE_VERSION: "26.6"
+  # Values the packaged app is validated against (see project.yml).
+  EXPECTED_BUNDLE_ID: com.j23n.localgallery.app
+  EXPECTED_WIDGET_BUNDLE_ID: com.j23n.localgallery.app.widgets
+  EXPECTED_MIN_OS: "18.0"
 
 jobs:
   build:
     runs-on: macos-26
+    timeout-minutes: 90
     steps:
       - name: Checkout source
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
@@ -58,7 +63,7 @@ jobs:
       - name: Generate Xcode project
         run: xcodegen
 
-      - name: Build unsigned iOS app
+      - name: Build unsigned iOS app (Release, device)
         shell: bash
         run: |
           set -euo pipefail
@@ -69,6 +74,8 @@ jobs:
           rm -rf "$DERIVED" "$ROOT/build/ipa"
           mkdir -p "$ROOT/build"
 
+          # pipefail (above) makes an xcodebuild failure fail this step even
+          # though its output is piped through tee.
           xcodebuild \
             -project "$ROOT/LocalGallery.xcodeproj" \
             -scheme LocalGallery \
@@ -81,16 +88,174 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             build 2>&1 | tee "$ROOT/xcodebuild-build.log"
 
-          APP="$DERIVED/Build/Products/Release-iphoneos/LocalGallery.app"
-          if [[ ! -d "$APP" ]]; then
-            # Fallback to the exact app target product, but never package a test runner.
-            APP="$(find "$DERIVED/Build/Products" -type d -name 'LocalGallery.app' -print -quit 2>/dev/null || true)"
+      - name: Locate and validate app bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          PRODUCTS="$GITHUB_WORKSPACE/build/DerivedData/Build/Products"
+
+          # Find the real product instead of guessing a path. Only the Release
+          # device build may be packaged: never a simulator build or a test runner.
+          APPS=()
+          while IFS= read -r line; do
+            APPS+=("$line")
+          done < <(find "$PRODUCTS" -maxdepth 2 -type d -name 'LocalGallery.app' -path '*/Release-iphoneos/*' 2>/dev/null | sort)
+
+          if [[ "${#APPS[@]}" -ne 1 ]]; then
+            echo "::error::Expected exactly one Release-iphoneos/LocalGallery.app under $PRODUCTS, found ${#APPS[@]}."
+            echo "App bundles found under DerivedData:"
+            find "$GITHUB_WORKSPACE/build/DerivedData" -type d \( -name '*.app' -o -name '*.appex' \) -print 2>/dev/null | head -100 || true
+            exit 1
+          fi
+          APP="${APPS[0]}"
+          echo "App bundle: $APP"
+
+          PLIST="$APP/Info.plist"
+          if [[ ! -f "$PLIST" ]]; then
+            echo "::error::Info.plist is missing from $APP"
+            exit 1
+          fi
+          plutil -lint "$PLIST"
+
+          pb() { /usr/libexec/PlistBuddy -c "Print :$1" "$2"; }
+          BUNDLE_ID="$(pb CFBundleIdentifier "$PLIST")"
+          EXE="$(pb CFBundleExecutable "$PLIST")"
+          PLATFORM="$(pb CFBundleSupportedPlatforms:0 "$PLIST")"
+          MIN_OS="$(pb MinimumOSVersion "$PLIST")"
+          VERSION="$(pb CFBundleShortVersionString "$PLIST")"
+          BUILD="$(pb CFBundleVersion "$PLIST")"
+          echo "CFBundleIdentifier=$BUNDLE_ID  CFBundleExecutable=$EXE  Platform=$PLATFORM  MinimumOSVersion=$MIN_OS  Version=$VERSION ($BUILD)"
+
+          fail=0
+          check() { if [[ "$1" != "$2" ]]; then echo "::error::$3: expected '$2', got '$1'"; fail=1; fi; }
+          check "$BUNDLE_ID" "$EXPECTED_BUNDLE_ID" "CFBundleIdentifier"
+          check "$PLATFORM" "iPhoneOS" "CFBundleSupportedPlatforms[0]"
+          check "$MIN_OS" "$EXPECTED_MIN_OS" "MinimumOSVersion"
+          if [[ ! "$BUILD" =~ ^[0-9]+$ ]]; then
+            echo "::error::CFBundleVersion '$BUILD' is not a number (set_build_number.sh did not run?)"
+            fail=1
+          fi
+          if [[ ! -f "$APP/$EXE" ]]; then
+            echo "::error::Main executable '$EXE' is missing from the app bundle"
+            fail=1
+          else
+            ARCHS="$(lipo -archs "$APP/$EXE")"
+            echo "Executable architectures: $ARCHS"
+            if [[ " $ARCHS " != *" arm64 "* ]]; then
+              echo "::error::Executable is not arm64 (got: $ARCHS)"
+              fail=1
+            fi
           fi
 
-          if [[ -z "$APP" || ! -d "$APP" || ! -f "$APP/Info.plist" ]]; then
-            echo "ERROR: LocalGallery.app was not produced at the expected Release device path."
-            echo "DerivedData path: $DERIVED"
-            echo "App bundles found under DerivedData:"
-            find "$DERIVED" -type d \( -name '*.app' -o -name '*.appex' \) -print 2>/dev/null | head -200 || true
-            echo "Build settings for product paths:"
-            xcodebuild \
+          WIDGET="$APP/PlugIns/LocalGalleryWidgets.appex"
+          if [[ ! -f "$WIDGET/Info.plist" ]]; then
+            echo "::error::Widget extension is missing from the app bundle"
+            fail=1
+          else
+            check "$(pb CFBundleIdentifier "$WIDGET/Info.plist")" "$EXPECTED_WIDGET_BUNDLE_ID" "Widget CFBundleIdentifier"
+          fi
+
+          if [[ "$fail" -ne 0 ]]; then
+            exit 1
+          fi
+
+          {
+            echo "APP=$APP"
+            echo "EXE=$EXE"
+            echo "VERSION=$VERSION"
+            echo "BUILD=$BUILD"
+          } >> "$GITHUB_ENV"
+
+      - name: Package IPA
+        shell: bash
+        run: |
+          set -euo pipefail
+          IPA_DIR="$GITHUB_WORKSPACE/build/ipa"
+          rm -rf "$IPA_DIR"
+          mkdir -p "$IPA_DIR/Payload"
+          ditto "$APP" "$IPA_DIR/Payload/LocalGallery.app"
+          (cd "$IPA_DIR" && /usr/bin/zip -qry -X LocalGallery.ipa Payload)
+          ls -l "$IPA_DIR/LocalGallery.ipa"
+
+      - name: Verify IPA contents and report signing status
+        shell: bash
+        run: |
+          set -euo pipefail
+          IPA="$GITHUB_WORKSPACE/build/ipa/LocalGallery.ipa"
+          test -s "$IPA"
+          unzip -tq "$IPA"
+
+          LIST="$(unzip -Z1 "$IPA")"
+          fail=0
+          need() {
+            if ! grep -qxF "$1" <<<"$LIST"; then
+              echo "::error::IPA is missing $1"
+              fail=1
+            fi
+          }
+          need "Payload/LocalGallery.app/Info.plist"
+          need "Payload/LocalGallery.app/$EXE"
+          need "Payload/LocalGallery.app/PlugIns/LocalGalleryWidgets.appex/Info.plist"
+
+          # Everything must live under exactly one Payload/<name>.app directory.
+          TOPS="$(grep -oE '^Payload/[^/]+' <<<"$LIST" | sort -u)"
+          if [[ "$TOPS" != "Payload/LocalGallery.app" ]]; then
+            echo "::error::Unexpected top-level entries in IPA: $TOPS"
+            fail=1
+          fi
+          if grep -qv '^Payload/' <<<"$LIST"; then
+            echo "::error::IPA contains entries outside Payload/"
+            fail=1
+          fi
+
+          # Re-read Info.plist from the packaged IPA itself, not from the build dir.
+          TMP="$(mktemp -d)"
+          unzip -q "$IPA" "Payload/LocalGallery.app/Info.plist" -d "$TMP"
+          IPA_BUNDLE_ID="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$TMP/Payload/LocalGallery.app/Info.plist")"
+          if [[ "$IPA_BUNDLE_ID" != "$EXPECTED_BUNDLE_ID" ]]; then
+            echo "::error::IPA bundle id is '$IPA_BUNDLE_ID', expected '$EXPECTED_BUNDLE_ID'"
+            fail=1
+          fi
+
+          if [[ "$fail" -ne 0 ]]; then
+            exit 1
+          fi
+
+          SIZE="$(du -h "$IPA" | cut -f1)"
+          SIGNING="$(codesign -dvv "$APP" 2>&1 || true)"
+          echo "$SIGNING"
+
+          {
+            echo "## LocalGallery IPA"
+            echo
+            echo "- File: \`LocalGallery.ipa\` ($SIZE), version $VERSION ($BUILD)"
+            echo "- Bundle id: \`$IPA_BUNDLE_ID\`, device build (iPhoneOS, arm64), min iOS $EXPECTED_MIN_OS"
+            echo "- Structure verified: \`Payload/LocalGallery.app\` with Info.plist, executable and widget extension"
+            echo
+            echo "**Signing status: UNSIGNED.** Built with code signing disabled. This is a valid package but it will"
+            echo "**not install on an iPhone as-is**. It must be re-signed with a certificate and provisioning profile"
+            echo "(or sideloaded with a tool that re-signs it) before installation."
+            echo
+            echo '```'
+            echo "$SIGNING"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Runs only if every step above succeeded, so a published artifact has
+      # always passed bundle and IPA validation.
+      - name: Upload IPA
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: LocalGallery-unsigned-IPA
+          path: build/ipa/LocalGallery.ipa
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: xcodebuild-log
+          path: xcodebuild-build.log
+          if-no-files-found: ignore
+          retention-days: 14

@@ -2,7 +2,7 @@
 
 use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
-use std::rc::Rc;s
+use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Receiver;
 use std::sync::Arc;
@@ -1037,6 +1037,7 @@ impl Window {
         }
         let factory = gtk::SignalListItemFactory::new();
         let thumbs = self.inner.thumbs.clone();
+        let thumbs_unbind = thumbs.clone();
         let scale = self.scale_factor();
         factory.connect_setup(move |_, obj| {
             let item = obj
@@ -1074,8 +1075,6 @@ impl Window {
                 }
             }
         });
-        let thumbs_unbind = thumbs.clone();
-        factory.connect_bind(move |_, obj| {
         factory.connect_unbind(move |_, obj| {
             let item = obj
                 .downcast_ref::<gtk::ListItem>()
@@ -1229,6 +1228,7 @@ impl Window {
         }
         let factory = gtk::SignalListItemFactory::new();
         let thumbs = self.inner.thumbs.clone();
+        let thumbs_unbind = thumbs.clone();
         let scale = self.scale_factor();
         factory.connect_setup(move |_, obj| {
             let item = obj
@@ -1269,8 +1269,6 @@ impl Window {
                 thumbs.bind_grid(&picture, path, id, scale);
             }
         });
-        let thumbs_unbind = thumbs.clone();
-        factory.connect_bind(move |_, obj| {
         factory.connect_unbind(move |_, obj| {
             let item = obj
                 .downcast_ref::<gtk::ListItem>()
