@@ -58,56 +58,39 @@ jobs:
       - name: Generate Xcode project
         run: xcodegen
 
-      - name: Archive unsigned iOS app
-        run: |
-          xcodebuild archive \
-            -project LocalGallery.xcodeproj \
-            -scheme LocalGallery \
-            -destination "generic/platform=iOS" \
-            -archivePath build/LocalGallery.xcarchive \
-            -resultBundlePath ArchiveResults.xcresult \
-            CODE_SIGN_IDENTITY="" \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGNING_ALLOWED=NO \
-            | tee xcodebuild-archive.log
-
-      - name: Package unsigned IPA
+      - name: Build unsigned iOS app
         shell: bash
         run: |
           set -euo pipefail
-          ARCHIVE="build/LocalGallery.xcarchive"
-          APPS_DIR="$ARCHIVE/Products/Applications"
+          ROOT="$GITHUB_WORKSPACE"
+          DERIVED="$ROOT/build/DerivedData"
 
-          # Do not assume the compiled app bundle's exact product name.
-          APP=""
-          if [[ -d "$APPS_DIR" ]]; then
-            APP="$(find "$APPS_DIR" -maxdepth 1 -type d -name '*.app' -print -quit)"
+          # Start from clean Xcode products so packaging cannot pick up stale output.
+          rm -rf "$DERIVED" "$ROOT/build/ipa"
+          mkdir -p "$ROOT/build"
+
+          xcodebuild \
+            -project "$ROOT/LocalGallery.xcodeproj" \
+            -scheme LocalGallery \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination "generic/platform=iOS" \
+            -derivedDataPath "$DERIVED" \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            build 2>&1 | tee "$ROOT/xcodebuild-build.log"
+
+          APP="$DERIVED/Build/Products/Release-iphoneos/LocalGallery.app"
+          if [[ ! -d "$APP" ]]; then
+            # Fallback to the exact app target product, but never package a test runner.
+            APP="$(find "$DERIVED/Build/Products" -type d -name 'LocalGallery.app' -print -quit 2>/dev/null || true)"
           fi
 
-          if [[ -z "$APP" ]]; then
-            echo "ERROR: No .app bundle found in $APPS_DIR"
-            echo "Archive contents for diagnosis:"
-            find "$ARCHIVE" -maxdepth 5 -print 2>/dev/null | head -200 || true
-            exit 1
-          fi
-
-          echo "Packaging app bundle: $APP"
-          rm -rf build/ipa
-          mkdir -p build/ipa/Payload
-          ditto "$APP" "build/ipa/Payload/$(basename "$APP")"
-          cd build/ipa
-          /usr/bin/zip -qry LocalGallery-unsigned.ipa Payload
-          test -s LocalGallery-unsigned.ipa
-          echo "IPA created: $(pwd)/LocalGallery-unsigned.ipa"
-
-      - name: Upload IPA and build logs
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: LocalGallery-unsigned-IPA
-          path: |
-            build/ipa/LocalGallery-unsigned.ipa
-            xcodebuild-archive.log
-            ArchiveResults.xcresult
-          if-no-files-found: warn
-          retention-days: 14
+          if [[ -z "$APP" || ! -d "$APP" || ! -f "$APP/Info.plist" ]]; then
+            echo "ERROR: LocalGallery.app was not produced at the expected Release device path."
+            echo "DerivedData path: $DERIVED"
+            echo "App bundles found under DerivedData:"
+            find "$DERIVED" -type d \( -name '*.app' -o -name '*.appex' \) -print 2>/dev/null | head -200 || true
+            echo "Build settings for product paths:"
+            xcodebuild \
