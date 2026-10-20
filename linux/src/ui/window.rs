@@ -2,7 +2,7 @@
 
 use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
-use std::rc::Rc;
+use std::rc::Rc;s
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Receiver;
 use std::sync::Arc;
@@ -527,7 +527,7 @@ impl Window {
             let result = crate::host::open_library_with_commit(
                 &root_thread,
                 &flag,
-                Some(&|msg, done, total| {
+                Some(&move |msg, done, total| {
                     let _ = progress_tx.send(ScanEvent::Progress {
                         token,
                         msg: msg.to_string(),
@@ -1075,6 +1075,7 @@ impl Window {
             }
         });
         let thumbs_unbind = thumbs.clone();
+        factory.connect_bind(move |_, obj| {
         factory.connect_unbind(move |_, obj| {
             let item = obj
                 .downcast_ref::<gtk::ListItem>()
@@ -1269,6 +1270,7 @@ impl Window {
             }
         });
         let thumbs_unbind = thumbs.clone();
+        factory.connect_bind(move |_, obj| {
         factory.connect_unbind(move |_, obj| {
             let item = obj
                 .downcast_ref::<gtk::ListItem>()
