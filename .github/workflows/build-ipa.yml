@@ -72,11 +72,29 @@ jobs:
             | tee xcodebuild-archive.log
 
       - name: Package unsigned IPA
+        shell: bash
         run: |
-          APP="build/LocalGallery.xcarchive/Products/Applications/LocalGallery.app"
-          test -d "$APP"
+          set -euo pipefail
+          ARCHIVE="build/LocalGallery.xcarchive"
+          APPS_DIR="$ARCHIVE/Products/Applications"
+
+          # Do not assume the compiled app bundle's exact product name.
+          APP=""
+          if [[ -d "$APPS_DIR" ]]; then
+            APP="$(find "$APPS_DIR" -maxdepth 1 -type d -name '*.app' -print -quit)"
+          fi
+
+          if [[ -z "$APP" ]]; then
+            echo "ERROR: No .app bundle found in $APPS_DIR"
+            echo "Archive contents for diagnosis:"
+            find "$ARCHIVE" -maxdepth 5 -print 2>/dev/null | head -200 || true
+            exit 1
+          fi
+
+          echo "Packaging app bundle: $APP"
+          rm -rf build/ipa
           mkdir -p build/ipa/Payload
-          cp -R "$APP" build/ipa/Payload/LocalGallery.app
+          ditto "$APP" "build/ipa/Payload/$(basename "$APP")"
           cd build/ipa
           /usr/bin/zip -qry LocalGallery-unsigned.ipa Payload
           test -s LocalGallery-unsigned.ipa
