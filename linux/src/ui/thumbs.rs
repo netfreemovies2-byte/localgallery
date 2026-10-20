@@ -7,7 +7,6 @@ use std::rc::Rc;
 use std::sync::mpsc::Receiver;
 
 use gtk::gdk_pixbuf::{Colorspace, Pixbuf};
-use gtk::prelude::*;
 use gtk::{gdk, glib, Picture};
 
 use crate::decode::RgbFrame;
