@@ -1,0 +1,54 @@
+
+name: Build LocalGallery IPA
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: |
+          xcodebuild -version
+          swift --version
+          rustc --version || true
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Build Gallery core
+        run: ./scripts/build_core.sh
+
+      - name: Prepare required pack directory
+        run: mkdir -p build/pack
+
+      - name: Generate Xcode project
+        run: xcodegen
+
+      - name: Build unsigned device app
+        run: |
+          xcodebuild \
+            -project LocalGallery.xcodeproj \
+            -scheme LocalGallery \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build/DerivedData \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+
+      - name: Upload build output
+        uses: actions/upload-artifact@v4
+        with:
+          name: LocalGallery-iOS-build
+          path: build/DerivedData/Build/Products/Release-iphoneos/
