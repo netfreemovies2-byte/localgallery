@@ -12,7 +12,7 @@ import SwiftUI
 @MainActor
 final class AppRouter {
     enum Tab: Hashable {
-        case folders, collections, photos
+        case folders, collections, photos, cameraRoll
     }
 
     var selectedTab: Tab = .folders

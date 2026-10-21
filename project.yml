@@ -97,6 +97,7 @@ targets:
             CFBundleTypeRole: Editor
             CFBundleURLSchemes:
               - localgallery
+        NSPhotoLibraryUsageDescription: "LocalGallery shows the photos and videos in your iPhone's Photos library in the Camera Roll tab, and lets you favorite, share or delete them when you ask. Everything stays on your device."
         NSContactsUsageDescription: "LocalGallery uses your contacts to surface birthday memories for the people in your photos. Names are matched only against your photo tags — nothing leaves the device."
         UIBackgroundModes:
           - fetch

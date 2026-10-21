@@ -338,6 +338,14 @@ struct ContentView: View {
                 Label("Photos", systemImage: "square.stack.3d.up")
             }
             .tag(AppRouter.Tab.photos)
+
+            // iPhone Photos library (PhotoKit). Separate from the file-based
+            // tabs above, which browse folders granted through the Files app.
+            CameraRollTab()
+                .tabItem {
+                    Label("Camera Roll", systemImage: "photo.on.rectangle")
+                }
+                .tag(AppRouter.Tab.cameraRoll)
         }
         .minimizableTabBar()
         .onChange(of: store.libraryAvailability) { _, availability in
