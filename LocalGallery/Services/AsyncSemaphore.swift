@@ -1,3 +1,5 @@
+import Foundation
+
 /// Counting semaphore for bounding TaskGroup / ad-hoc task parallelism.
 /// Used to gate concurrent ImageIO decodes (`ThumbnailService`), sidecar
 /// fetches (`SidecarSyncService`), and metadata reads (`EnrichmentService`)

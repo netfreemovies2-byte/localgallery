@@ -115,7 +115,7 @@ enum SlideshowVideoRenderer {
             progress: { @MainActor p in
                 // streamFrames reports decode-window progress in 0…0.25;
                 // encode fills 0.25…0.99 via the visit callback below.
-                if p <= 0.25 { await progress(p) }
+                if p <= 0.25 { progress(p) }
             }
         ) { current, next in
             try Task.checkCancellation()

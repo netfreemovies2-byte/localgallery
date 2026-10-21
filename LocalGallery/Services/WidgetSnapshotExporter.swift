@@ -308,7 +308,7 @@ actor WidgetSnapshotExporter {
             parents[folder.id] = chain
             for sub in folder.subfolders { walk(sub, parentChain: chain) }
         }
-        if let root { walk(root, parentChain: "") }
+        if let root = rootFolder { walk(root, parentChain: "") }
         return parents
     }
 

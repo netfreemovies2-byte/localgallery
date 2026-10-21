@@ -136,7 +136,7 @@ final class GeocodingService {
     nonisolated static func isEligible(_ photo: PhotoFile, force: Bool = false) -> Bool {
         guard isCandidate(photo) else { return false }
         if force { return true }
-        return placesStillNeeded(tags: placeTags(for: photo).map(\.fullPath))
+        return LocalGallery.placesStillNeeded(tags: placeTags(for: photo).map(\.fullPath))
     }
 
     /// Downloaded still with GPS. No sidecar I/O — safe on the main actor
@@ -161,7 +161,7 @@ final class GeocodingService {
 
     /// Sidecar has no finished `Places/…/City` path. Reads the file.
     nonisolated static func placesStillNeeded(_ photo: PhotoFile) -> Bool {
-        placesStillNeeded(tags: placeTags(for: photo).map(\.fullPath))
+        LocalGallery.placesStillNeeded(tags: placeTags(for: photo).map(\.fullPath))
     }
 
     /// Places tags from the sidecar. No sidecar ⇒ none, so a write-path
@@ -367,7 +367,7 @@ final class GeocodingService {
     /// Transient failures worth another try. Nominatim 429/5xx arrive as
     /// `GeoError.retryable`. Tests still inject `kCLErrorNetwork`.
     static func isRetryable(_ error: Error) -> Bool {
-        if case .retryable = error as? GeoError { return true }
+        if case .Retryable? = error as? GeoError { return true }
         let ns = error as NSError
         if error is LookupError { return true }
         if ns.domain == kCLErrorDomain {
