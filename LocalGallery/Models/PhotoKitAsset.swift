@@ -30,7 +30,11 @@ struct PhotoKitAsset: Identifiable, Hashable, Sendable {
     /// the main thread is a visible stall.
     init(asset: PHAsset) {
         id = asset.localIdentifier
-        filename = asset.originalFilename
+        // `PHAsset` has no filename of its own — the original name lives on
+        // the primary `PHAssetResource`. Fall back to the local identifier's
+        // name component so the field is never empty.
+        filename = PHAssetResource.assetResources(for: asset).first?.originalFilename
+            ?? asset.localIdentifier
         isVideo = asset.mediaType == .video
         isLivePhoto = asset.mediaSubtypes.contains(.photoLive)
         creationDate = asset.creationDate

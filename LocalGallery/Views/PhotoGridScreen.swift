@@ -271,26 +271,28 @@ struct PhotoGridScreen: View {
                         // "this album is empty" — the same copy for both
                         // leaves the user guessing which one they are
                         // looking at.
-                        if isFiltered {
-                            let trimmed = query.trimmingCharacters(in: .whitespaces)
-                            ContentUnavailableView {
-                                Label("No Matches", systemImage: "magnifyingglass")
-                            } description: {
-                                Text(trimmed.isEmpty
-                                     ? "No photos carry the selected tags."
-                                     : "No photos match “\(trimmed)”.")
-                            } actions: {
-                                Button("Clear Filters") {
-                                    query = ""
-                                    activeTags = []
+                        Group {
+                            if isFiltered {
+                                let trimmed = query.trimmingCharacters(in: .whitespaces)
+                                ContentUnavailableView {
+                                    Label("No Matches", systemImage: "magnifyingglass")
+                                } description: {
+                                    Text(trimmed.isEmpty
+                                         ? "No photos carry the selected tags."
+                                         : "No photos match “\(trimmed)”.")
+                                } actions: {
+                                    Button("Clear Filters") {
+                                        query = ""
+                                        activeTags = []
+                                    }
+                                    .buttonStyle(.bordered)
                                 }
-                                .buttonStyle(.bordered)
+                            } else {
+                                ContentUnavailableView(
+                                    "No Photos",
+                                    systemImage: "photo.stack"
+                                )
                             }
-                        } else {
-                            ContentUnavailableView(
-                                "No Photos",
-                                systemImage: "photo.stack"
-                            )
                         }
                         .padding(.top, 48)
                     } else {

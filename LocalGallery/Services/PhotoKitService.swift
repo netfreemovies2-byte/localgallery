@@ -248,11 +248,21 @@ final class PhotoKitService {
     /// `AVPlayerItem(asset:)` streams from the photo library, so a video
     /// that only exists in iCloud plays without the app downloading it
     /// first.
-    func playerItem(for assetID: String) -> AVPlayerItem? {
+    func playerItem(for assetID: String) async -> AVPlayerItem? {
         guard authorization.isReadable else { return nil }
         guard let asset = Self.fetchAsset(id: assetID) else { return nil }
         guard asset.mediaType == .video else { return nil }
-        return AVPlayerItem(asset: asset)
+        let options = PHVideoRequestOptions()
+        options.isNetworkAccessAllowed = true
+        options.deliveryMode = .automatic
+
+        let avAsset: AVAsset? = await withCheckedContinuation { continuation in
+            PHImageManager.default().requestAVAsset(forVideo: asset, options: options) { avAsset, _, _ in
+                continuation.resume(returning: avAsset)
+            }
+        }
+        guard let avAsset else { return nil }
+        return AVPlayerItem(asset: avAsset)
     }
 
     /// The paired video of a Live Photo, written to a temporary file so the
@@ -387,7 +397,7 @@ final class PhotoKitService {
         var result: [PhotoKitAlbum] = []
 
         // "All assets" — the Camera Roll pseudo-album.
-        let all = PHAsset.fetchAssets(with: nil)
+        let all = PHAsset.fetchAssets(with: nil as PHFetchOptions?)
         result.append(PhotoKitAlbum(
             id: PhotoKitAlbumID.cameraRoll,
             title: "Camera Roll",
@@ -397,45 +407,42 @@ final class PhotoKitService {
         ))
 
         // "Recents" — the system's own recently-added collection.
-        //
-        // `.smartAlbumSubtypeAny` is *not* "Recents": with `.smartAlbum`
-        // it means "every smart album", and taking the first object of
-        // that list is whatever the system happened to order first.
-        // `.smartAlbumSubtypeRecentlyAdded` is the actual collection.
-        if let recents = fetchCollection(subtype: .smartAlbumSubtypeRecentlyAdded, type: .smartAlbum),
-           recents.count > 0 {
-            result.append(PhotoKitAlbum(
-                id: recents.localIdentifier,
-                title: "Recents",
-                kind: .recents,
-                count: recents.count,
-                coverAssetID: firstAssetID(in: recents)
-            ))
+        if let recents = fetchCollection(subtype: .smartAlbumRecentlyAdded, type: .smartAlbum) {
+            let count = assetCount(in: recents)
+            if count > 0 {
+                result.append(PhotoKitAlbum(
+                    id: recents.localIdentifier,
+                    title: "Recents",
+                    kind: .recents,
+                    count: count,
+                    coverAssetID: firstAssetID(in: recents)
+                ))
+            }
         }
 
         // Screenshots / Videos / Favorites — smart albums that exist only
         // if the user has something to put in them.
-        let filters: [(PhotoKitAlbum.Kind, PHAssetCollection.Subtype, String)] = [
-            (.screenshots, .smartAlbumSubtypeScreenshots, "Screenshots"),
-            (.videos, .smartAlbumSubtypeVideos, "Videos"),
-            (.favorites, .smartAlbumSubtypeFavorites, "Favorites"),
+        let filters: [(PhotoKitAlbum.Kind, PHAssetCollectionSubtype, String)] = [
+            (.screenshots, .smartAlbumScreenshots, "Screenshots"),
+            (.videos, .smartAlbumVideos, "Videos"),
+            (.favorites, .smartAlbumFavorites, "Favorites"),
         ]
         for (kind, subtype, title) in filters {
-            guard let collection = fetchCollection(subtype: subtype, type: .smartAlbum),
-                  collection.count > 0 else { continue }
+            guard let collection = fetchCollection(subtype: subtype, type: .smartAlbum) else { continue }
+            let count = assetCount(in: collection)
+            guard count > 0 else { continue }
             result.append(PhotoKitAlbum(
                 id: collection.localIdentifier,
                 title: title,
                 kind: kind,
-                count: collection.count,
+                count: count,
                 coverAssetID: firstAssetID(in: collection)
             ))
         }
 
-        // The user's own albums. `.any` covers both regular albums and
-        // the ones the system creates for shared devices.
+        // The user's own albums.
         let userCollections = PHAssetCollection.fetchAssetCollections(
-            with: .album, subtype: .any, options: nil
+            with: .album, subtype: .albumRegular, options: nil
         )
         for index in 0..<userCollections.count {
             let collection = userCollections.object(at: index)
@@ -443,7 +450,7 @@ final class PhotoKitService {
                 id: collection.localIdentifier,
                 title: collection.localizedTitle ?? "Album",
                 kind: .user,
-                count: collection.count,
+                count: assetCount(in: collection),
                 coverAssetID: firstAssetID(in: collection)
             ))
         }
@@ -460,15 +467,15 @@ final class PhotoKitService {
     nonisolated static func fetchCameraRoll(offset: Int, limit: Int) async -> [PhotoKitAsset] {
         let options = PHFetchOptions()
         options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
-        options.fetchLimit = limit
-        options.fetchOffset = offset
-        let result = PHAsset.fetchAssets(with: nil, options: options)
+        if limit != Int.max {
+            options.fetchLimit = offset + limit
+        }
+        let result = PHAsset.fetchAssets(with: options)
+        guard offset < result.count else { return [] }
+        let end = min(result.count, offset + limit)
         var assets: [PhotoKitAsset] = []
-        assets.reserveCapacity(result.count)
-        // An index loop rather than `enumerateObjects`: the block form
-        // would capture the `assets` array mutably, and an imported
-        // Objective-C block is not guaranteed to be non-`@Sendable`.
-        for index in 0..<result.count {
+        assets.reserveCapacity(end - offset)
+        for index in offset..<end {
             assets.append(PhotoKitAsset(asset: result.object(at: index)))
         }
         return assets
@@ -486,13 +493,14 @@ final class PhotoKitService {
         let options = PHFetchOptions()
         options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
         if limit != Int.max {
-            options.fetchLimit = limit
-            options.fetchOffset = offset
+            options.fetchLimit = offset + limit
         }
         let result = PHAsset.fetchAssets(in: collection, options: options)
+        guard offset < result.count else { return [] }
+        let end = min(result.count, offset + limit)
         var assets: [PhotoKitAsset] = []
-        assets.reserveCapacity(result.count)
-        for index in 0..<result.count {
+        assets.reserveCapacity(end - offset)
+        for index in offset..<end {
             assets.append(PhotoKitAsset(asset: result.object(at: index)))
         }
         return assets
@@ -500,12 +508,17 @@ final class PhotoKitService {
 
     /// The first smart album of a given subtype, if the system has one.
     private nonisolated static func fetchCollection(
-        subtype: PHAssetCollection.Subtype,
+        subtype: PHAssetCollectionSubtype,
         type: PHAssetCollectionType
     ) -> PHAssetCollection? {
         PHAssetCollection.fetchAssetCollections(
             with: type, subtype: subtype, options: nil
         ).firstObject
+    }
+
+    /// The number of assets in a collection.
+    private nonisolated static func assetCount(in collection: PHAssetCollection) -> Int {
+        PHAsset.fetchAssets(in: collection, options: nil).count
     }
 
     /// The local id of a collection's first asset — the album's cover.
@@ -531,7 +544,7 @@ final class PhotoKitService {
         let options = PHFetchOptions()
         options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
         options.fetchLimit = 1
-        return PHAsset.fetchAssets(with: nil, options: options).firstObject?.localIdentifier
+        return PHAsset.fetchAssets(with: options).firstObject?.localIdentifier
     }
 
     /// Request one image from the photo library.

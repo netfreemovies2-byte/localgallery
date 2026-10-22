@@ -117,16 +117,18 @@ struct PhotoKitPageView: View {
     }
 
     private func startVideo() {
-        guard let item = store.photoKit.playerItem(for: asset.id) else { return }
-        let newPlayer = AVPlayer(playerItem: item)
-        player = newPlayer
-        isPlayingVideo = true
-        videoTransportVisible = true
-        // Attach before playing so the transport's first frame already
-        // knows the duration.
-        playbackState.attach(to: newPlayer)
-        playbackState.play()
-        isChromeVisible = false
+        Task {
+            guard let item = await store.photoKit.playerItem(for: asset.id) else { return }
+            let newPlayer = AVPlayer(playerItem: item)
+            player = newPlayer
+            isPlayingVideo = true
+            videoTransportVisible = true
+            // Attach before playing so the transport's first frame already
+            // knows the duration.
+            playbackState.attach(to: newPlayer)
+            playbackState.play()
+            isChromeVisible = false
+        }
     }
 
     // MARK: - Photo
