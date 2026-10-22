@@ -32,4 +32,29 @@ struct GridLayoutConfig {
         default: return "square.grid.4x3.fill"
         }
     }
+
+    /// The name of the tier the *next* tap lands on.
+    ///
+    /// The button shows the density you will get, not the one you have —
+    /// the way the iOS Photos grid button works, and the only way the icon
+    /// can be unambiguous: "2×2" next to a 3-column grid means "tap for 2
+    /// columns", which reads backwards on its own. The accessibility label
+    /// names the same *next* density, so the spoken form and the icon agree.
+    static func nextTier(from tier: Int) -> Int {
+        let clamped = min(max(tier, 0), GridLayoutConfig.tierCount - 1)
+        return (clamped + 1) % GridLayoutConfig.tierCount
+    }
+
+    /// The icon for the density the next tap lands on.
+    var nextTierIconName: String {
+        GridLayoutConfig(sizeTier: Self.nextTier(from: sizeTier), isLandscape: isLandscape).gridIconName
+    }
+
+    /// Spoken description of the button, so the icon is not the only way
+    /// the action is described.
+    var nextTierAccessibilityLabel: String {
+        let next = Self.nextTier(from: sizeTier)
+        let columns = GridLayoutConfig(sizeTier: next, isLandscape: isLandscape).columnCount
+        return "Grid size, \(columns) columns"
+    }
 }

@@ -77,6 +77,13 @@ targets:
     info:
       path: LocalGallery/Info.plist
       properties:
+        # The Home Screen name. `CFBundleName` stays `$(PRODUCT_NAME)`
+        # (LocalGallery) because the app bundle directory, the executable
+        # and the target are all still called that — renaming the target
+        # would churn the xcframework link, the App Group, the widget
+        # extension and the signing setup for no user-visible gain. The
+        # *display* name is the only thing the user sees.
+        CFBundleDisplayName: Pixel Pic
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         UIApplicationSceneManifest:
@@ -97,7 +104,13 @@ targets:
             CFBundleTypeRole: Editor
             CFBundleURLSchemes:
               - localgallery
-        NSContactsUsageDescription: "LocalGallery uses your contacts to surface birthday memories for the people in your photos. Names are matched only against your photo tags — nothing leaves the device."
+        NSContactsUsageDescription: "Pixel Pic uses your contacts to surface birthday memories for the people in your photos. Names are matched only against your photo tags — nothing leaves the device."
+        # The device's own Photos library (Camera Roll tab). Read-only in
+        # practice: the app never writes to the library without an explicit
+        # user action, so the add-access string exists only to satisfy the
+        # system if that ever changes.
+        NSPhotoLibraryUsageDescription: "Pixel Pic shows the photos already on this device — your camera roll, screenshots and your own albums — so you can browse them alongside your folders. Nothing is uploaded and nothing leaves the device."
+        NSPhotoLibraryAddUsageDescription: "Pixel Pic only saves to your photo library when you explicitly ask it to. Nothing is added without your say-so."
         UIBackgroundModes:
           - fetch
         # Required so the system folder picker (SwiftUI `.fileImporter`,
@@ -179,7 +192,7 @@ targets:
     info:
       path: LocalGalleryWidgets/Info.plist
       properties:
-        CFBundleDisplayName: LocalGallery
+        CFBundleDisplayName: Pixel Pic
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         NSExtension:

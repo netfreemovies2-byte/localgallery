@@ -1,7 +1,6 @@
 import SwiftUI
 import UIKit
 import AVFoundation
-import AVKit
 
 // MARK: - Photo Page
 
@@ -21,13 +20,50 @@ struct PhotoPageView: View {
     @State private var isZoomed = false
     @State private var isMaterializing = false
     @State private var materializeError: String?
+    /// Whether the video's own transport controls are showing. The viewer
+    /// hides its chrome while a video plays, so the controls have to bring
+    /// their own.
+    ///
+    /// A binding, not local state: the viewer needs to know whether the
+    /// transport is on screen, because the swipe-to-dismiss gesture has to
+    /// leave the strip of screen the transport occupies alone.
+    @Binding var videoTransportVisible: Bool
+    /// The transport's playback state. Held here rather than inside the
+    /// bar so it survives the bar being hidden and shown again — a
+    /// transport that reset its scrubber every time the user tapped the
+    /// video would be unusable.
+    @State private var playbackState = VideoPlaybackState()
 
     var body: some View {
         GeometryReader { geo in
             ZStack {
                 if photo.isVideo {
                     if isPlayingVideo, let player = videoPlayer {
-                        VideoPlayer(player: player)
+                        // The raw player layer, not AVKit's `VideoPlayer`:
+                        // `VideoPlayer` brings its own transport controls,
+                        // which would sit on top of the app's transport bar
+                        // and give the user two scrubbers fighting over the
+                        // same gesture. `AVPlayerLayerView` is the same
+                        // component the live-photo overlay uses.
+                        AVPlayerLayerView(player: player)
+                        // Tap anywhere on the video toggles its controls,
+                        // the way every other player does — the viewer's own
+                        // chrome is hidden during playback, so without this
+                        // there is no way back to the controls.
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                videoTransportVisible.toggle()
+                            }
+                        }
+                        .overlay(alignment: .bottom) {
+                            if videoTransportVisible {
+                                VideoTransportBar(state: playbackState)
+                                    .padding(.horizontal, 16)
+                                    .padding(.bottom, 24)
+                                    .transition(.opacity)
+                            }
+                        }
                     } else {
                         if let img = thumbnail ?? initialThumbnail {
                             Image(uiImage: img)
@@ -41,7 +77,15 @@ struct PhotoPageView: View {
                             let player = AVPlayer(url: photo.url)
                             videoPlayer = player
                             isPlayingVideo = true
-                            player.play()
+                            // The transport comes up with the video, and the
+                            // viewer needs to know: the swipe-to-dismiss
+                            // gesture must leave the strip the transport
+                            // occupies alone.
+                            videoTransportVisible = true
+                            // Attach before playing so the transport's
+                            // first frame already knows the duration.
+                            playbackState.attach(to: player)
+                            playbackState.play()
                             isChromeVisible = false
                         } label: {
                             Image(systemName: "play.circle.fill")
@@ -146,6 +190,15 @@ struct PhotoPageView: View {
             // the next photo.
             videoPlayer?.pause()
             isPlayingVideo = false
+            // The transport's periodic observer has to go with the page —
+            // it would otherwise keep waking the main actor every 250ms
+            // for a video that is no longer on screen.
+            playbackState.detach()
+            // The transport is gone with the page, so the viewer must stop
+            // excluding the bottom strip of the photo area from the
+            // dismiss gesture — otherwise the *next* photo (a still) would
+            // have a dead zone at the bottom it never had.
+            videoTransportVisible = false
             stopLivePlayback()
         }
     }
@@ -161,6 +214,15 @@ struct PhotoPageView: View {
         livePlayer = nil
         isZoomed = false
         materializeError = nil
+        // A new photo means a new video: drop the previous page's
+        // transport state so the scrubber does not show the old video's
+        // duration.
+        playbackState.detach()
+        // The transport only exists once the video is actually playing, so
+        // a page that has not started playback reports "no transport". That
+        // keeps the viewer's dismiss gesture working over the whole photo
+        // area until there is something there to hit.
+        videoTransportVisible = false
 
         if thumbnail == nil {
             // Cloud-aware decode for the placeholder thumbnail. Cheap; the

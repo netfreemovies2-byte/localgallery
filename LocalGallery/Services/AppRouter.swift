@@ -12,12 +12,16 @@ import SwiftUI
 @MainActor
 final class AppRouter {
     enum Tab: Hashable {
-        case folders, collections, photos
+        case folders, collections, photos, cameraRoll
     }
 
     var selectedTab: Tab = .folders
     var foldersPath: [FolderRoute] = []
     var collectionsPath: [CollectionsRoute] = []
+    /// The Photos tab's own navigation stack — the device's Photos library
+    /// has drill-ins (an album → its assets) that the folder tree's stack
+    /// does not model.
+    var photoLibraryPath: [PhotoLibraryRoute] = []
     /// Tag full-paths to apply when AllPhotosView next appears. Cleared after
     /// the view consumes it so subsequent visits don't re-apply the filter.
     var pendingPhotosTagFilter: [String] = []
@@ -102,4 +106,11 @@ final class AppRouter {
 enum FolderRoute: Hashable {
     case browser(PhotoFolder)
     case grid(PhotoFolder)
+}
+
+/// Typed navigation values for the Photos tab — the device's own Photos
+/// library.
+enum PhotoLibraryRoute: Hashable {
+    /// One album's assets, in chronological order.
+    case album(PhotoKitAlbum)
 }

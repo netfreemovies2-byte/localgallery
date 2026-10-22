@@ -15,7 +15,10 @@ import XCTest
 /// * **"The root is gone."** `rootFolder == nil`. Publish empty, do not
 ///   persist — a remount should still find the on-disk snapshot.
 /// * **"The root could not be listed."** `failedDirectoryPaths` contains
-///   the root. Keep cached photos and set `.unavailable`.
+///   the root. Keep cached photos and set `.unavailable` — unless the
+///   security scope was *refused*, which is `.permissionDenied` (the user
+///   has to re-grant access; a retry cannot fix it). The mapping itself is
+///   pinned in `LibraryAvailabilityTests`.
 /// * **"I walked the library and it is empty."** Publish it, even silently,
 ///   persist the empty snapshot, and set `.empty`.
 ///

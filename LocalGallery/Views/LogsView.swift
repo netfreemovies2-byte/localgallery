@@ -90,7 +90,7 @@ struct LogsView: View {
             } label: { Label("Copy", systemImage: "doc.on.doc") }
             ShareLink(
                 item: LogExportFile(text: logStore.asText),
-                preview: SharePreview("LocalGallery Logs")
+                preview: SharePreview("Pixel Pic Logs")
             ) { Label("Share", systemImage: "square.and.arrow.up") }
             Divider()
             Button(role: .destructive) {

@@ -191,6 +191,15 @@ struct LocalGalleryApp: App {
     @State private var store = GalleryStore()
     @State private var router = AppRouter()
     @AppStorage("crashReportingEnabled") private var crashReportingEnabled = false
+    /// The appearance the user picked in Settings.
+    ///
+    /// `@AppStorage` rather than a `GalleryStore` property: the setting is
+    /// about the *window*, not about the library, and it has to be applied
+    /// at the scene root — a value the app root reads on every appearance
+    /// change. The stored raw value is read through `AppAppearance` so an
+    /// unknown one degrades to "System" rather than leaving the app with
+    /// no scheme at all.
+    @AppStorage(AppAppearance.defaultsKey) private var appearanceRaw = AppAppearance.system.rawValue
 
     init() {
         try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
@@ -204,6 +213,13 @@ struct LocalGalleryApp: App {
                 .environment(store)
                 .environment(router)
                 .tint(Design.accentColor)
+                // The user's appearance choice. `nil` follows the system,
+                // which is the default; a forced scheme overrides it.
+                //
+                // Applied at the scene root so it reaches every window and
+                // every sheet — a scheme set on a single tab would leave the
+                // Settings sheet (a separate presentation) in the old one.
+                .preferredColorScheme(AppAppearance(rawValue: appearanceRaw)?.colorScheme)
                 // Hand the store to the BG-task service. Runs once per
                 // scene build; on a true background-only launch the
                 // WindowGroup doesn't build and the service stays detached
@@ -246,8 +262,13 @@ struct LocalGalleryApp: App {
     }
 
     private func configureAppearance() {
-        let bg = UIColor(Design.bg)
-        let accent = UIColor(Design.accentColor)
+        // The dynamic variants, not `UIColor(Design.bg)`. `UIColor(Color)`
+        // snapshots the colour at the *current* trait collection, so it
+        // would bake today's appearance into the proxy and never follow a
+        // system appearance change. The `Scheme` exposes the provider
+        // itself, so the nav bar resolves light or dark per trait
+        // collection — the same source the SwiftUI tokens use.
+        let accent = Design.accentUIColor
 
         // The WindowGroup-level `.tint()` is the SwiftUI authority, but there
         // are gaps where it can't reach a control: sheet presentations cross
@@ -273,16 +294,21 @@ struct LocalGalleryApp: App {
         // Nav bar: transparent at scroll edge, translucent blur when content
         // scrolls under. Matches stock apps (Photos, Messages) — no opaque band.
         // Unrelated to @Observable; still required for the warm design treatment.
+        //
+        // The alpha is applied *inside* the colour provider
+        // (`dynamic(alpha:)`), not with `withAlphaComponent` on a resolved
+        // colour: that call snapshots the current appearance, which is
+        // exactly the bug this whole pass is fixing.
         let navStandard = UINavigationBarAppearance()
         navStandard.configureWithOpaqueBackground()
-        navStandard.backgroundColor = bg.withAlphaComponent(0.90)
+        navStandard.backgroundColor = Design.bgScheme.dynamic(alpha: 0.90)
         navStandard.shadowColor = .clear
-        navStandard.titleTextAttributes = [.foregroundColor: UIColor(Design.ink)]
+        navStandard.titleTextAttributes = [.foregroundColor: Design.inkScheme.dynamic]
 
         let navEdge = UINavigationBarAppearance()
         navEdge.configureWithTransparentBackground()
         navEdge.shadowColor = .clear
-        navEdge.titleTextAttributes = [.foregroundColor: UIColor(Design.ink)]
+        navEdge.titleTextAttributes = [.foregroundColor: Design.inkScheme.dynamic]
 
         UINavigationBar.appearance().standardAppearance = navStandard
         UINavigationBar.appearance().scrollEdgeAppearance = navEdge
@@ -293,8 +319,22 @@ struct LocalGalleryApp: App {
         // color or separator without UIKit appearance; unrelated to @Observable.
         let tab = UITabBarAppearance()
         tab.configureWithOpaqueBackground()
-        tab.backgroundColor = bg.withAlphaComponent(0.96)
-        tab.shadowColor = UIColor(Design.separator)
+        tab.backgroundColor = Design.bgScheme.dynamic(alpha: 0.96)
+        tab.shadowColor = Design.separatorScheme.dynamic
+        // Item colours follow the ink ramp rather than the system label
+        // colours: the unselected label is a step down from the selected
+        // one, which keeps the four tabs readable on the warm canvas in
+        // both appearances. Left at the system defaults, the unselected
+        // label would sit at system grey and read as *disabled* next to
+        // the accent-tinted selected tab.
+        //
+        // Set on the *bar* rather than on the nested
+        // `UITabBarItemAppearance` states: the bar's own `tintColor` and
+        // `unselectedItemTintColor` cover every layout variant — stacked,
+        // inline and compact-inline — with one pair of properties, so the
+        // iPad's variants cannot drift apart from the phone's.
+        UITabBar.appearance().tintColor = accent
+        UITabBar.appearance().unselectedItemTintColor = Design.ink3Scheme.dynamic
         UITabBar.appearance().standardAppearance = tab
         UITabBar.appearance().scrollEdgeAppearance = tab
     }
@@ -338,13 +378,24 @@ struct ContentView: View {
                 Label("Photos", systemImage: "square.stack.3d.up")
             }
             .tag(AppRouter.Tab.photos)
+
+            // The path is bound so the album grid's drill-in pushes onto
+            // this stack. `PhotoKitLibraryView` registers the
+            // `PhotoLibraryRoute` destination on it.
+            NavigationStack(path: $router.photoLibraryPath) {
+                PhotoKitLibraryView()
+            }
+            .tabItem {
+                Label("Camera Roll", systemImage: "camera.aperture")
+            }
+            .tag(AppRouter.Tab.cameraRoll)
         }
         .minimizableTabBar()
         .onChange(of: store.libraryAvailability) { _, availability in
             // Pushed folder/person/memory screens still hold live queries
-            // against `allPhotos`. Unlistable-root keeps that array, so
+            // against `allPhotos`. An unlistable root keeps that array, so
             // leaving them on the stack would show the library we just hid.
-            if availability == .unavailable {
+            if availability.hidesLibrary {
                 router.foldersPath = []
                 router.collectionsPath = []
             }

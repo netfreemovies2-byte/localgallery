@@ -69,7 +69,7 @@ struct MemoriesWidgetEntryView: View {
             WidgetEmptyView(
                 symbol: "sparkles.rectangle.stack",
                 title: "No memories yet",
-                subtitle: "Open LocalGallery to scan your library"
+                subtitle: "Open Pixel Pic to scan your library"
             )
         }
     }

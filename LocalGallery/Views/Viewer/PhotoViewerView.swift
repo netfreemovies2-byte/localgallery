@@ -14,6 +14,10 @@ struct PhotoViewerView: View {
 
     @State private var isChromeVisible: Bool = true
     @State private var isInfoOpen: Bool = false
+    /// Whether the video transport bar is on screen. Owned here (not in the
+    /// page) because the swipe-to-dismiss gesture needs to know whether the
+    /// transport is currently occupying the bottom of the photo area.
+    @State private var videoTransportVisible: Bool = true
     @State private var dismissOffset: CGFloat = 0
     @State private var shareRequest: PhotoShareRequest?
     @State private var showDeleteConfirm = false
@@ -80,7 +84,8 @@ struct PhotoViewerView: View {
                                 store: store,
                                 currentPhotoID: $currentPhotoID,
                                 isChromeVisible: $isChromeVisible,
-                                isInfoOpen: $isInfoOpen
+                                isInfoOpen: $isInfoOpen,
+                                videoTransportVisible: $videoTransportVisible
                             )
                         } else {
                             Color.clear
@@ -93,7 +98,7 @@ struct PhotoViewerView: View {
                             PhotoInfoPanel(photo: photo)
                                 .environment(store)
                         } else {
-                            Color(.systemGroupedBackground)
+                            Design.bgGrouped
                         }
                     }
                     .frame(width: geo.size.width, height: infoHeight)
@@ -186,6 +191,11 @@ struct PhotoViewerView: View {
                     offset: $dismissOffset,
                     isInfoOpen: $isInfoOpen,
                     photoHeight: photoHeight,
+                    // The video transport owns the bottom strip of the photo
+                    // area. Without this, a vertical drag that started on
+                    // its scrubber would dismiss the viewer instead of
+                    // scrubbing.
+                    bottomExclusionHeight: videoTransportExclusionHeight,
                     onDismiss: { dismiss() },
                     onOpenInfo: { withAnimation(Self.infoOpenSpring) { isInfoOpen = true } },
                     onCloseInfo: { withAnimation(Self.infoOpenSpring) { isInfoOpen = false } }
@@ -244,13 +254,30 @@ struct PhotoViewerView: View {
     private var topBar: some View {
         ChromeGlassGroup {
             ZStack {
-                // Centred pill — anchored to screen mid regardless of the X
-                // button. Fixed width + reserved second line so the pill stays
-                // the same size whether or not a given photo has location data.
-                if let photo = currentPhoto, let lines = PhotoChrome.pillLines(for: photo) {
-                    ChromePill(date: lines.date, location: lines.location)
-                        .opacity(isInfoOpen ? 0 : 1)
-                        .animation(.easeInOut(duration: 0.2), value: isInfoOpen)
+                // Centred stack — anchored to screen mid regardless of the X
+                // and menu buttons. The date/location pill has a fixed width
+                // and a reserved second line, so the pill stays the same size
+                // whether or not a given photo has location data; the
+                // position pill sits under it in the same column.
+                VStack(spacing: 6) {
+                    if let photo = currentPhoto, let lines = PhotoChrome.pillLines(for: photo) {
+                        ChromePill(date: lines.date, location: lines.location)
+                            .opacity(isInfoOpen ? 0 : 1)
+                            .animation(.easeInOut(duration: 0.2), value: isInfoOpen)
+                    }
+                    // Position in the set — the one piece of context the
+                    // viewer otherwise lacks. "1 of 2,431" tells the user
+                    // where they are without opening the info drawer.
+                    if let position {
+                        Text(position)
+                            .font(.system(size: 12, weight: .semibold, design: .rounded))
+                            .foregroundStyle(.white)
+                            .monospacedDigit()
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 7)
+                            .chromeGlass(in: Capsule(), legacyOpacity: 0.16)
+                            .transition(.opacity)
+                    }
                 }
 
                 HStack {
@@ -275,6 +302,28 @@ struct PhotoViewerView: View {
         }
         .padding(.horizontal)
         .padding(.top, 8)
+    }
+
+    /// "3 of 120" — the current photo's position in the set being viewed.
+    /// `nil` when the position cannot be resolved (the photo was removed
+    /// by a rescan).
+    private var position: String? {
+        guard let idx = currentIndex, !photos.isEmpty else { return nil }
+        return "\(idx + 1) of \(photos.count)"
+    }
+
+    /// The strip at the bottom of the photo area that the video transport
+    /// bar occupies, and therefore that the swipe-to-dismiss gesture must
+    /// not claim. `nil` when the transport is not on screen, so the
+    /// gesture behaves exactly as it did before.
+    ///
+    /// The transport is only on screen for a video the user actually
+    /// started playing — a still photo in the viewer has no transport, and
+    /// excluding the bottom 120pt of its area would silently kill the
+    /// swipe-to-dismiss gesture there for no reason.
+    private var videoTransportExclusionHeight: CGFloat? {
+        guard currentPhoto?.isVideo == true, videoTransportVisible else { return nil }
+        return 120
     }
 
     private var bottomActionBar: some View {

@@ -138,12 +138,12 @@ private struct FolderMoveList: View {
                 ThumbnailView(url: coverURL, size: 56, cornerRadius: 8)
             } else {
                 RoundedRectangle(cornerRadius: 8)
-                    .fill(Color(.systemGray5))
+                    .fill(Design.bgGrouped)
                     .frame(width: 56, height: 56)
                     .overlay {
                         Image(systemName: "folder.fill")
                             .font(.title3)
-                            .foregroundStyle(.tertiary)
+                            .foregroundStyle(Design.ink3)
                     }
             }
             VStack(alignment: .leading, spacing: 4) {

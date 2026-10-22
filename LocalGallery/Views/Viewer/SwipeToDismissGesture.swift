@@ -14,6 +14,11 @@ struct SwipeToDismissGestureInstaller: UIViewRepresentable {
     @Binding var offset: CGFloat
     @Binding var isInfoOpen: Bool
     var photoHeight: CGFloat
+    /// A region at the bottom of the photo area where the dismiss pan does
+    /// not begin — the video transport bar lives there, and a vertical drag
+    /// that starts on its scrubber belongs to the scrubber, not to the
+    /// dismiss gesture. `nil` means "no excluded region".
+    var bottomExclusionHeight: CGFloat? = nil
     var onDismiss: () -> Void
     var onOpenInfo: () -> Void
     var onCloseInfo: () -> Void
@@ -42,6 +47,7 @@ struct SwipeToDismissGestureInstaller: UIViewRepresentable {
         context.coordinator.offsetBinding = $offset
         context.coordinator.isInfoOpenBinding = $isInfoOpen
         context.coordinator.photoHeight = photoHeight
+        context.coordinator.bottomExclusionHeight = bottomExclusionHeight
         context.coordinator.onDismiss = onDismiss
         context.coordinator.onOpenInfo = onOpenInfo
         context.coordinator.onCloseInfo = onCloseInfo
@@ -58,6 +64,7 @@ struct SwipeToDismissGestureInstaller: UIViewRepresentable {
             offset: $offset,
             isInfoOpen: $isInfoOpen,
             photoHeight: photoHeight,
+            bottomExclusionHeight: bottomExclusionHeight,
             onDismiss: onDismiss,
             onOpenInfo: onOpenInfo,
             onCloseInfo: onCloseInfo
@@ -68,6 +75,7 @@ struct SwipeToDismissGestureInstaller: UIViewRepresentable {
         var offsetBinding: Binding<CGFloat>
         var isInfoOpenBinding: Binding<Bool>
         var photoHeight: CGFloat
+        var bottomExclusionHeight: CGFloat?
         var onDismiss: () -> Void
         var onOpenInfo: () -> Void
         var onCloseInfo: () -> Void
@@ -78,6 +86,7 @@ struct SwipeToDismissGestureInstaller: UIViewRepresentable {
             offset: Binding<CGFloat>,
             isInfoOpen: Binding<Bool>,
             photoHeight: CGFloat,
+            bottomExclusionHeight: CGFloat?,
             onDismiss: @escaping () -> Void,
             onOpenInfo: @escaping () -> Void,
             onCloseInfo: @escaping () -> Void
@@ -85,6 +94,7 @@ struct SwipeToDismissGestureInstaller: UIViewRepresentable {
             self.offsetBinding = offset
             self.isInfoOpenBinding = isInfoOpen
             self.photoHeight = photoHeight
+            self.bottomExclusionHeight = bottomExclusionHeight
             self.onDismiss = onDismiss
             self.onOpenInfo = onOpenInfo
             self.onCloseInfo = onCloseInfo
@@ -125,9 +135,15 @@ struct SwipeToDismissGestureInstaller: UIViewRepresentable {
             guard let pan = gestureRecognizer as? UIPanGestureRecognizer else { return false }
             let v = pan.velocity(in: pan.view)
             guard abs(v.y) > abs(v.x) * 2.0 else { return false }
+            let location = pan.location(in: pan.view)
             if isInfoOpenBinding.wrappedValue {
-                let location = pan.location(in: pan.view)
                 return location.y < photoHeight
+            }
+            // A control that owns the bottom of the photo area (the video
+            // transport) gets its drags. The dismiss gesture is a
+            // convenience; a scrubber that fights it is a bug.
+            if let exclusion = bottomExclusionHeight, exclusion > 0 {
+                return location.y < photoHeight - exclusion
             }
             return true
         }

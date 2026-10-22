@@ -10,6 +10,11 @@ struct LibraryEmptyState: View {
     var message: String = "Choose a folder in Settings to get started."
     var retryTitle: String? = nil
     var onRetry: (() -> Void)? = nil
+    /// A second, secondary action — used by the permission-denied state,
+    /// where "Retry" is useless on its own and the real fix is to pick the
+    /// folder again.
+    var secondaryTitle: String? = nil
+    var onSecondary: (() -> Void)? = nil
 
     var body: some View {
         VStack(spacing: 20) {
@@ -31,13 +36,18 @@ struct LibraryEmptyState: View {
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(Design.accentColor)
             }
+            if let secondaryTitle, let onSecondary {
+                Button(secondaryTitle, action: onSecondary)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(Design.ink2)
+            }
         }
         .padding(32)
     }
 
-    /// Bookmark exists but the root is gone or unlistable. Retry is a
-    /// non-silent light scan so progress UI is visible — a silent pass would
-    /// look like the button did nothing.
+    /// Bookmark exists but the root is gone or the provider is offline.
+    /// Retry is a non-silent light scan so progress UI is visible — a silent
+    /// pass would look like the button did nothing.
     static func unavailable(icon: String, onRetry: @escaping () -> Void) -> LibraryEmptyState {
         LibraryEmptyState(
             icon: icon,
@@ -45,6 +55,20 @@ struct LibraryEmptyState: View {
             message: "The selected folder can’t be found. It may have been moved or is temporarily offline.",
             retryTitle: "Retry",
             onRetry: onRetry
+        )
+    }
+
+    /// The folder is there but the app is not allowed to read it — the
+    /// security scope lapsed, or the folder was never granted. A retry
+    /// cannot fix that (the scope has to be re-established first), so the
+    /// copy points at the one action that can: choosing the folder again.
+    static func permissionDenied(icon: String, onReopen: @escaping () -> Void) -> LibraryEmptyState {
+        LibraryEmptyState(
+            icon: icon,
+            title: "Access Denied",
+            message: "Pixel Pic doesn’t have permission to read the selected folder. Choose it again to grant access.",
+            secondaryTitle: "Choose Folder…",
+            onSecondary: onReopen
         )
     }
 

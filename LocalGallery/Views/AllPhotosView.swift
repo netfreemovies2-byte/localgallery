@@ -5,13 +5,14 @@ struct AllPhotosView: View {
     @Environment(AppRouter.self) private var router
     @State private var seedTags: [TagSuggestion] = []
     @State private var showSettings = false
+    @State private var showFolderPicker = false
 
     var body: some View {
         Group {
             // Cold-launch spinner only while there is nothing to show.
-            // `.unavailable` wins even when `allPhotos` still holds a cache:
+            // A hidden library wins even when `allPhotos` still holds a cache:
             // rendering the grid would look like the library was still there.
-            if store.isScanning && store.allPhotos.isEmpty && store.libraryAvailability != .unavailable {
+            if store.isScanning && store.allPhotos.isEmpty && !store.libraryAvailability.hidesLibrary {
                 chrome { ProgressView("Scanning…") }
             } else {
                 switch store.libraryAvailability {
@@ -19,6 +20,8 @@ struct AllPhotosView: View {
                     chrome { emptyState }
                 case .unavailable:
                     chrome { unavailableState }
+                case .permissionDenied:
+                    chrome { permissionDeniedState }
                 case .empty:
                     chrome { emptyLibraryState }
                 case .ready:
@@ -27,6 +30,7 @@ struct AllPhotosView: View {
             }
         }
         .background(Design.bg)
+        .libraryFolderPicker(isPresented: $showFolderPicker)
         .onAppear { applyPendingTagFilter() }
         .onChange(of: router.pendingPhotosTagFilter) { _, _ in applyPendingTagFilter() }
     }
@@ -78,6 +82,15 @@ struct AllPhotosView: View {
     private var unavailableState: some View {
         LibraryEmptyState.unavailable(icon: "photo.stack") {
             Task { await store.rescan(kind: .light, silent: false) }
+        }
+    }
+
+    /// The folder exists but we may not read it. Re-picking it is the only
+    /// fix — a retry would fail identically — so the action opens the
+    /// system picker directly instead of bouncing the user through Settings.
+    private var permissionDeniedState: some View {
+        LibraryEmptyState.permissionDenied(icon: "lock.trianglebadge.exclamationmark") {
+            showFolderPicker = true
         }
     }
 

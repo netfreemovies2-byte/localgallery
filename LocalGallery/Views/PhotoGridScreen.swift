@@ -114,6 +114,13 @@ struct PhotoGridScreen: View {
         GridLayoutConfig(sizeTier: sizeTier, isLandscape: isLandscape)
     }
 
+    /// The layout for the *current* orientation — the toolbar's grid-size
+    /// button needs it outside the `GeometryReader` that the grid itself
+    /// lives in.
+    private var currentGrid: GridLayoutConfig {
+        grid(isLandscape: verticalSizeClass == .compact)
+    }
+
     // Cheap identity for the photos input: count + first/last date catches
     // both re-scans (count changes) and enrichment (dates change). `epoch`
     // catches an on-disk move, which keeps count and dates the same but
@@ -260,10 +267,31 @@ struct PhotoGridScreen: View {
                     }
 
                     if filtered.isEmpty {
-                        ContentUnavailableView(
-                            "No photos match.",
-                            systemImage: "photo.stack"
-                        )
+                        // Distinguish "your filter excluded everything" from
+                        // "this album is empty" — the same copy for both
+                        // leaves the user guessing which one they are
+                        // looking at.
+                        if isFiltered {
+                            let trimmed = query.trimmingCharacters(in: .whitespaces)
+                            ContentUnavailableView {
+                                Label("No Matches", systemImage: "magnifyingglass")
+                            } description: {
+                                Text(trimmed.isEmpty
+                                     ? "No photos carry the selected tags."
+                                     : "No photos match “\(trimmed)”.")
+                            } actions: {
+                                Button("Clear Filters") {
+                                    query = ""
+                                    activeTags = []
+                                }
+                                .buttonStyle(.bordered)
+                            }
+                        } else {
+                            ContentUnavailableView(
+                                "No Photos",
+                                systemImage: "photo.stack"
+                            )
+                        }
                         .padding(.top, 48)
                     } else {
                         LazyVGrid(columns: grid.columns(for: width), spacing: 2) {
@@ -273,14 +301,7 @@ struct PhotoGridScreen: View {
                                         gridCell(photo: photo, cellSize: cell)
                                     }
                                 } header: {
-                                    Text(section.title.uppercased())
-                                        .font(.system(size: 12.5, weight: .semibold))
-                                        .tracking(0.2)
-                                        .foregroundStyle(Design.ink2)
-                                        .frame(maxWidth: .infinity, alignment: .leading)
-                                        .padding(.horizontal, 20)
-                                        .padding(.top, 14)
-                                        .padding(.bottom, 6)
+                                    GridSectionHeader(title: section.title)
                                         .id(section.id)
                                 }
                             }
@@ -480,7 +501,7 @@ struct PhotoGridScreen: View {
         }
         .padding(.horizontal, 12)
         .frame(height: 36)
-        .background(Color(red: 0.235, green: 0.216, blue: 0.176).opacity(0.06), in: RoundedRectangle(cornerRadius: 10))
+        .background(Design.fieldFill, in: RoundedRectangle(cornerRadius: 10))
         .padding(.horizontal, 16)
         .padding(.bottom, 8)
     }
@@ -539,7 +560,13 @@ struct PhotoGridScreen: View {
 
             if selectMode {
                 Rectangle()
-                    .fill(isSelected ? Design.accentColor.opacity(0.18) : .clear)
+                    .fill(isSelected ? Design.accentColor.opacity(0.22) : .clear)
+                    .animation(.easeInOut(duration: 0.15), value: isSelected)
+                // A selected cell also gets a hairline ring, so the
+                // selection reads even over a bright photo where the
+                // checkmark's white ring has no contrast.
+                RoundedRectangle(cornerRadius: 2)
+                    .strokeBorder(isSelected ? Design.accentColor : .clear, lineWidth: 3)
                     .animation(.easeInOut(duration: 0.15), value: isSelected)
                 VStack {
                     Spacer()
@@ -694,6 +721,18 @@ struct PhotoGridScreen: View {
                     .foregroundStyle(Design.accentColor)
                 }
 
+                // Grid density. The pinch gesture does the same thing, but
+                // it is undiscoverable — a button is the affordance a user
+                // can find without already knowing the gesture exists.
+                // The icon shows the density the next tap lands on, so the
+                // action is never ambiguous.
+                Button {
+                    sizeTier = GridLayoutConfig.nextTier(from: sizeTier)
+                } label: {
+                    Image(systemName: currentGrid.nextTierIconName)
+                }
+                .accessibilityLabel(currentGrid.nextTierAccessibilityLabel)
+
                 if isRoot {
                     SettingsToolbarButton(isPresented: $showSettings)
                 }
@@ -834,6 +873,27 @@ struct PhotoGridScreen: View {
         self.sectionsCache = result.sections
         self.yearsCache = result.years
         self.dateByID = result.dates
+    }
+}
+
+// MARK: - Section header
+
+/// The month caption above a block of grid cells.
+///
+/// Kept as its own view so the grid's `Section` header is a single
+/// measured element: the caption's own layout must not be re-evaluated
+/// when a cell below it changes.
+private struct GridSectionHeader: View {
+    let title: String
+
+    var body: some View {
+        Text(title)
+            .font(.system(size: 15, weight: .semibold))
+            .foregroundStyle(Design.ink)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 16)
+            .padding(.top, 18)
+            .padding(.bottom, 8)
     }
 }
 

@@ -116,12 +116,69 @@ enum ProgressETA {
 enum LibraryAvailability: Equatable, Sendable {
     /// No folder bookmark.
     case noneSelected
-    /// Bookmark exists but the root could not be listed (gone, or permission/provider).
+    /// Bookmark exists but the root could not be listed (gone, or the
+    /// provider is offline). The folder may come back on its own — a
+    /// remount, a reconnect — so the recovery is a retry.
     case unavailable
+    /// The root exists but LocalGallery is **not allowed to read it**: the
+    /// security-scoped bookmark went stale, or the OS refused access to the
+    /// folder. Distinct from `.unavailable` because the fix is different and
+    /// only the user can do it — re-grant access, or pick the folder again.
+    case permissionDenied
     /// Root listed successfully and contains no photos.
     case empty
     /// Photos are in memory.
     case ready
+
+    /// Whether the app keeps the library it already has in memory. Both
+    /// failure modes do — the photos on disk are fine, only the *listing*
+    /// failed, and the scan's carry-forward kept them.
+    var keepsCachedLibrary: Bool {
+        self == .unavailable || self == .permissionDenied
+    }
+
+    /// Whether the UI should hide the library rather than show it. Both
+    /// failure modes do: a grid that still renders while the folder cannot
+    /// be read looks like a working library, which is exactly the wrong
+    /// impression.
+    ///
+    /// Currently the same set as `keepsCachedLibrary`, but the two answer
+    /// different questions — "do we still have the photos?" and "should the
+    /// user see them?" — and they will not always agree (a folder that
+    /// becomes readable again keeps the cache but must stop hiding it).
+    var hidesLibrary: Bool {
+        keepsCachedLibrary
+    }
+
+    /// The availability a finished scan pass implies.
+    ///
+    /// Pulled out of the scan pipeline as a pure function because the rule
+    /// it encodes is a policy — *which empty state does the user get, and
+    /// therefore which recovery do we offer them* — and a policy that can
+    /// only be reached through a real scan pass (and a real security-scope
+    /// refusal, which the OS decides) cannot be tested at all.
+    ///
+    /// The three inputs are the three things the scan pass knows:
+    ///
+    /// * `rootIsGone` — the root directory no longer exists. The folder was
+    ///   deleted or unmounted. A retry may find it again.
+    /// * `rootIsUnlistable` — the root exists but could not be listed.
+    /// * `accessDenied` — the OS refused our security scope, so we are not
+    ///   allowed to read it even though it is there.
+    ///
+    /// A refusal is the only one of the three that a *retry* cannot fix:
+    /// the user has to re-grant access by picking the folder again. So it
+    /// gets its own state and its own recovery, and everything else stays
+    /// `.unavailable` with a retry.
+    static func afterScan(
+        rootIsGone: Bool,
+        rootIsUnlistable: Bool,
+        accessDenied: Bool
+    ) -> LibraryAvailability {
+        if rootIsGone { return .unavailable }
+        if rootIsUnlistable { return accessDenied ? .permissionDenied : .unavailable }
+        return .ready
+    }
 }
 
 @Observable
@@ -253,6 +310,14 @@ final class GalleryStore {
     let geocoding: GeocodingService
     /// The single "Scan Photos" run: tagging, then faces, then places.
     let analysis: LibraryAnalysis
+    /// The device's own Photos library ("Camera Roll"), read through
+    /// PhotoKit. A separate source from the folder library on purpose:
+    /// a `PHAsset` has no file URL and no sidecar, so the folder
+    /// pipeline's model does not fit it.
+    ///
+    /// Named `photoKit` rather than `photos` so it cannot be confused with
+    /// the folder library's `photos(forTag:)` / `photos(for:)` lookups.
+    let photoKit: PhotoKitService
     /// Watches the library folder while the app is foregrounded. Directory
     /// vnode events and NSFilePresenter callbacks coalesce into a light
     /// silent rescan — Syncthing / Files deletions otherwise never update
@@ -290,6 +355,7 @@ final class GalleryStore {
         self.defaults = defaults
         self.clock = clock
         self.contactsService = contactsService
+        self.photoKit = PhotoKitService()
         self.bookmarks = BookmarkManager(defaults: defaults, bookmarkKey: paths.bookmarkKey)
         self.thumbnailService = ThumbnailService(thumbnailDir: paths.thumbnailDir)
         self.libraryMonitor = LibraryRootMonitor()

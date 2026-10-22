@@ -1,13 +1,24 @@
 import SwiftUI
-import UniformTypeIdentifiers
+import UIKit
 
 struct SettingsView: View {
     @Environment(GalleryStore.self) private var store
+    @Environment(AppRouter.self) private var router
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openURL) private var openURL
     @Environment(\.scenePhase) private var scenePhase
     @State private var showPicker = false
     @AppStorage("crashReportingEnabled") private var crashReportingEnabled = false
+    /// The appearance the user picked.
+    ///
+    /// A stored property rather than a local `@AppStorage` inside
+    /// `appearanceSection`: a local property wrapper is re-created on every
+    /// evaluation of the computed property, which would tear the binding
+    /// down and rebuild it on each render.
+    ///
+    /// The app root reads the same key, so writing it here updates the
+    /// window's colour scheme immediately.
+    @AppStorage(AppAppearance.defaultsKey) private var appearanceRaw = AppAppearance.system.rawValue
     private let crashService = CrashDiagnosticsService.shared
 
     private static let githubURL = URL(string: "https://github.com/j23n/localgallery")!
@@ -48,6 +59,10 @@ struct SettingsView: View {
                 if store.hasFileProviderPhotos {
                     cloudStorageSection
                 }
+
+                cameraRollSection
+
+                appearanceSection
 
                 Section("People") {
                     Toggle(isOn: $memories.birthdaysEnabled) {
@@ -117,12 +132,12 @@ struct SettingsView: View {
                 } header: {
                     Text("Diagnostics")
                 } footer: {
-                    Text("When on, LocalGallery captures crash details and recent log entries on this device. Nothing is sent automatically — if a crash is captured, a banner appears here in Settings and you can choose to share the report with the developer. Folder names, person names, tags, memory titles, and file paths in logs are replaced with anonymous tokens like \"folder#7\". Export the Redaction Key on this device to reverse-map tokens back to the originals locally — the key file is never bundled with crash reports. App Store crash analytics (system-level) are unaffected by this setting.")
+                    Text("When on, Pixel Pic captures crash details and recent log entries on this device. Nothing is sent automatically — if a crash is captured, a banner appears here in Settings and you can choose to share the report with the developer. Folder names, person names, tags, memory titles, and file paths in logs are replaced with anonymous tokens like \"folder#7\". Export the Redaction Key on this device to reverse-map tokens back to the originals locally — the key file is never bundled with crash reports. App Store crash analytics (system-level) are unaffected by this setting.")
                 }
 
                 Section("About") {
                     VStack(alignment: .leading, spacing: 12) {
-                        Text("LocalGallery browses photos from a folder of your choice — no import, no library, no accounts.")
+                        Text("Pixel Pic browses photos from a folder of your choice — no import, no library, no accounts.")
                             .font(.callout)
 
                         Text("Found a bug or have feedback? Open an issue or get in touch:")
@@ -161,23 +176,7 @@ struct SettingsView: View {
                     crashService.refreshPendingCrash()
                 }
             }
-            .fileImporter(isPresented: $showPicker, allowedContentTypes: [.folder]) { result in
-                guard case .success(let pickerURL) = result else { return }
-                // Bookmark creation needs an active security scope; the
-                // long-lived scope is then (re)opened on the *resolved* URL
-                // via startAccessingFolder, so this transient one is closed
-                // immediately.
-                _ = pickerURL.startAccessingSecurityScopedResource()
-                store.saveBookmark(for: pickerURL)
-                pickerURL.stopAccessingSecurityScopedResource()
-
-                if let resolvedURL = store.resolveBookmark() {
-                    Task {
-                        store.startAccessingFolder(resolvedURL)
-                        await store.scanFolder(at: resolvedURL)
-                    }
-                }
-            }
+            .libraryFolderPicker(isPresented: $showPicker)
         }
     }
 
@@ -227,7 +226,7 @@ struct SettingsView: View {
     @ViewBuilder
     private var crashRows: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Label("LocalGallery crashed last session", systemImage: "exclamationmark.triangle.fill")
+            Label("Pixel Pic crashed last session", systemImage: "exclamationmark.triangle.fill")
                 .font(.subheadline)
                 .fontWeight(.semibold)
                 .foregroundStyle(.orange)
@@ -392,6 +391,106 @@ struct SettingsView: View {
         if let places = summary.places, places.failed > 0 { parts.append("\(places.failed) failed") }
         if summary.cancelled { parts.append("cancelled") }
         return parts.isEmpty ? "Nothing to do" : parts.joined(separator: ", ")
+    }
+
+    // MARK: - Camera Roll (the device's own photo library)
+
+    /// The Camera Roll tab's access state, and the one action that can
+    /// change it.
+    ///
+    /// The tab itself offers the same recovery, but the tab is only
+    /// reachable when the user goes looking for it. A user who said no
+    /// once and forgot should be able to fix it from Settings without
+    /// hunting through four tabs — and, importantly, *without* the app
+    /// re-asking for permission on every appearance, which is the
+    /// behaviour people object to most.
+    @ViewBuilder
+    private var cameraRollSection: some View {
+        Section {
+            LabeledContent {
+                Text(cameraRollAccessSummary)
+                    .foregroundStyle(.secondary)
+            } label: {
+                Label("Photos Library", systemImage: "photo.on.rectangle.angled")
+            }
+
+            switch store.photoKit.authorization {
+            case .notDetermined:
+                Button {
+                    Task {
+                        let result = await store.photoKit.requestAccess()
+                        if result.isReadable {
+                            await store.photoKit.loadLibrary()
+                        }
+                    }
+                } label: {
+                    Label("Allow Access to Photos", systemImage: "hand.raised")
+                }
+            case .denied:
+                Button {
+                    guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
+                    openURL(url)
+                } label: {
+                    Label("Open Settings", systemImage: "gear")
+                }
+            case .restricted:
+                // Nothing the app can offer — the policy is the user's
+                // administrator's, not theirs.
+                EmptyView()
+            case .limited, .authorized:
+                Button {
+                    // Dismiss Settings and switch to the Camera Roll tab
+                    // rather than pushing the library *inside* the
+                    // Settings sheet: the library owns a `NavigationStack`
+                    // and the router's photo-library path, and nesting a
+                    // second stack inside the sheet would give the user two
+                    // navigation bars fighting over the same drill-in.
+                    dismiss()
+                    router.selectedTab = .cameraRoll
+                } label: {
+                    Label("Open Camera Roll", systemImage: "camera.aperture")
+                }
+            }
+        } header: {
+            Text("Device Photos")
+        } footer: {
+            Text("Pixel Pic can show the photos already on this device — your camera roll, screenshots and your own albums — alongside your folders. Nothing is uploaded and nothing leaves the device.")
+        }
+    }
+
+    private var cameraRollAccessSummary: String {
+        switch store.photoKit.authorization {
+        case .notDetermined: return "Not requested"
+        case .restricted: return "Blocked by policy"
+        case .denied: return "Not allowed"
+        case .limited: return "Limited access"
+        case .authorized: return "Full access"
+        }
+    }
+
+    // MARK: - Appearance
+
+    /// The light/dark control.
+    ///
+    /// The app's palette is a warm light/dark *pair* (`Design.Scheme`),
+    /// so both appearances are designed rather than one being the system
+    /// grey. "System" is the default and follows the device.
+    @ViewBuilder
+    private var appearanceSection: some View {
+        Section {
+            Picker(selection: $appearanceRaw) {
+                ForEach(AppAppearance.allCases) { option in
+                    Text(option.label).tag(option.rawValue)
+                }
+            } label: {
+                Label("Appearance", systemImage: "circle.lefthalf.filled")
+            }
+            .pickerStyle(.segmented)
+        } header: {
+            Text("Appearance")
+        } footer: {
+            Text("Pixel Pic has a warm light theme and a matching dark one. “System” follows your device’s setting.")
+        }
     }
 
     // MARK: - Cloud Storage

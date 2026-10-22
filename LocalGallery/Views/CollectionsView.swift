@@ -34,6 +34,7 @@ struct CollectionsView: View {
     @Binding var path: [CollectionsRoute]
     @Environment(GalleryStore.self) private var store
     @State private var showSettings = false
+    @State private var showFolderPicker = false
 
     // Person → contact linking sheet
     @State private var linkingPerson: TagSuggestion?
@@ -58,9 +59,10 @@ struct CollectionsView: View {
     var body: some View {
         Group {
             // Cold-launch spinner only while there is nothing to show.
-            // `.unavailable` wins even when `allPhotos` still holds a cache:
-            // the Events rail would otherwise keep listing ghost folders.
-            if store.isScanning && store.allPhotos.isEmpty && store.libraryAvailability != .unavailable {
+            // A hidden library wins even when `allPhotos` still holds a
+            // cache: the Events rail would otherwise keep listing ghost
+            // folders.
+            if store.isScanning && store.allPhotos.isEmpty && !store.libraryAvailability.hidesLibrary {
                 ProgressView("Scanning…")
             } else {
                 switch store.libraryAvailability {
@@ -68,6 +70,8 @@ struct CollectionsView: View {
                     emptyState
                 case .unavailable:
                     unavailableState
+                case .permissionDenied:
+                    permissionDeniedState
                 case .empty:
                     emptyLibraryState
                 case .ready:
@@ -76,6 +80,7 @@ struct CollectionsView: View {
             }
         }
         .background(Design.bg)
+        .libraryFolderPicker(isPresented: $showFolderPicker)
         .navigationTitle("Collections")
         .navigationBarTitleDisplayMode(.large)
         .task(id: store.tagging.pack?.version) {
@@ -518,6 +523,14 @@ struct CollectionsView: View {
     private var unavailableState: some View {
         LibraryEmptyState.unavailable(icon: "rectangle.stack") {
             Task { await store.rescan(kind: .light, silent: false) }
+        }
+    }
+
+    /// The folder exists but we may not read it — re-picking it is the only
+    /// fix, so the action opens the system picker directly.
+    private var permissionDeniedState: some View {
+        LibraryEmptyState.permissionDenied(icon: "lock.trianglebadge.exclamationmark") {
+            showFolderPicker = true
         }
     }
 }

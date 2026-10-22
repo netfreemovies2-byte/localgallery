@@ -92,4 +92,7 @@ enum Log {
     // info; individual events at debug so a Syncthing burst does not
     // drown LogsView.
     static let fs       = tee("fs")
+    // The device's own Photos library (PhotoKit). Album enumeration and
+    // image requests, not per-photo chatter.
+    static let photokit = tee("photokit")
 }

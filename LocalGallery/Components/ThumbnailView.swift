@@ -31,12 +31,12 @@ struct ThumbnailView: View {
                 // a thumb, or the local source file is gone. Same glyph tile
                 // either way so the cell doesn't shimmer forever.
                 Rectangle()
-                    .fill(Color(.systemGray6))
+                    .fill(Design.bgGrouped)
                     .frame(width: size, height: size)
                     .overlay(
                         Image(systemName: "photo")
                             .font(.system(size: max(16, size * 0.2)))
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(Design.ink3)
                     )
                     .transition(.opacity)
             } else {
@@ -104,10 +104,13 @@ struct ShimmerView: View {
 
     var body: some View {
         Rectangle()
-            .fill(Color(.systemGray6))
+            .fill(Design.bgGrouped)
             .overlay(
-                Color(.systemGray4)
-                    .opacity(isAnimating ? 0.35 : 0)
+                // A *lightening* wash, not an ink tint: the shimmer has to
+                // read as "loading", and a dark overlay over the placeholder
+                // reads as a pressed cell.
+                Design.shimmer
+                    .opacity(isAnimating ? 1 : 0)
             )
             .onAppear {
                 withAnimation(.easeInOut(duration: 1.0).repeatForever(autoreverses: true)) {

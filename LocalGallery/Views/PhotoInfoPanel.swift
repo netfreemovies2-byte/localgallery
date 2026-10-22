@@ -20,7 +20,7 @@ struct PhotoInfoPanel: View {
                 .padding(.bottom, 40)
                 .frame(maxWidth: .infinity)
         }
-        .background(Color(.systemGroupedBackground))
+        .background(Design.bgGrouped)
         .task(id: photo.id) {
             isLoading = true
             exifData = nil
@@ -559,7 +559,7 @@ private struct HierarchicalTagFlowView: View {
                 }
                 .padding(.horizontal, 10)
                 .padding(.vertical, 5)
-                .background(Color(.systemGray5), in: Capsule())
+                .background(Design.bgGrouped, in: Capsule())
             }
         }
     }

@@ -7,6 +7,7 @@ struct FolderBrowserView: View {
     var isRoot: Bool = true
 
     @State private var showSettings = false
+    @State private var showFolderPicker = false
 
     private var displayFolder: PhotoFolder? {
         if let folder {
@@ -60,17 +61,20 @@ struct FolderBrowserView: View {
             }
         }
         .sheet(isPresented: $showSettings) { SettingsView() }
+        .libraryFolderPicker(isPresented: $showFolderPicker)
     }
 
-    /// Root tab only. Unavailable takes the whole screen — the cached tree
-    /// may still be in memory after an unlistable root, and showing it would
-    /// look like the library was still there. The cold-launch spinner is
-    /// `isScanning && displayFolder == nil` so a Reload Library pass does
+    /// Root tab only. A hidden library takes the whole screen — the cached
+    /// tree may still be in memory after an unlistable root, and showing it
+    /// would look like the library was still there. The cold-launch spinner
+    /// is `isScanning && displayFolder == nil` so a Reload Library pass does
     /// not hide a tree we already have.
     @ViewBuilder
     private var rootBody: some View {
         if store.libraryAvailability == .unavailable {
             unavailableState
+        } else if store.libraryAvailability == .permissionDenied {
+            permissionDeniedState
         } else if store.isScanning && displayFolder == nil {
             ProgressView("Scanning folder…")
         } else if let folder = displayFolder {
@@ -84,11 +88,13 @@ struct FolderBrowserView: View {
 
     @ViewBuilder
     private var childBody: some View {
-        // Unlistable root keeps `rootFolder` in memory so lookup would still
-        // hit and show a ghost tree. The root tab already hid that; a pushed
-        // child has to as well.
+        // An unlistable root keeps `rootFolder` in memory so lookup would
+        // still hit and show a ghost tree. The root tab already hid that; a
+        // pushed child has to as well.
         if store.libraryAvailability == .unavailable {
             unavailableState
+        } else if store.libraryAvailability == .permissionDenied {
+            permissionDeniedState
         } else if let folder = displayFolder {
             folderContent(folder)
         } else {
@@ -114,83 +120,42 @@ struct FolderBrowserView: View {
         }
     }
 
-    @ViewBuilder
-    private func folderContent(_ folder: PhotoFolder) -> some View {
-        let sortedSubfolders = store.sortFolders(folder.subfolders)
-        List {
-            if !folder.photos.isEmpty {
-                Section("Photos") {
-                    NavigationLink {
-                        FolderGridView(
-                            title: folder.name,
-                            folderID: folder.id
-                        )
-                    } label: {
-                        Label("\(folder.photos.count) photos in this folder", systemImage: "photo.on.rectangle")
-                    }
-                }
-            }
-
-            if !sortedSubfolders.isEmpty {
-                Section("Subfolders") {
-                    ForEach(sortedSubfolders) { subfolder in
-                        NavigationLink {
-                            if subfolder.subfolders.isEmpty && !subfolder.photos.isEmpty {
-                                FolderGridView(
-                                    title: subfolder.name,
-                                    folderID: subfolder.id
-                                )
-                            } else {
-                                FolderBrowserView(folder: subfolder, isRoot: false)
-                            }
-                        } label: {
-                            folderRow(subfolder)
-                        }
-                    }
-                }
-            }
-
-            if folder.photos.isEmpty && folder.subfolders.isEmpty {
-                ContentUnavailableView(
-                    "No Photos Found",
-                    systemImage: "photo",
-                    description: Text("This folder doesn't contain any images.")
-                )
-            }
-        }
-        .softTopScrollEdge()
-        .refreshable {
-            await store.rescan(kind: .light)
+    /// The folder exists but we may not read it — re-picking it is the only
+    /// fix, so the action opens the system picker directly.
+    private var permissionDeniedState: some View {
+        LibraryEmptyState.permissionDenied(icon: "lock.trianglebadge.exclamationmark") {
+            showFolderPicker = true
         }
     }
 
-    private func folderRow(_ folder: PhotoFolder) -> some View {
-        HStack(spacing: 14) {
-            if let coverURL = folder.coverPhotoURL {
-                ThumbnailView(url: coverURL, size: 72, cornerRadius: 8)
-            } else {
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(Color(.systemGray5))
-                    .frame(width: 72, height: 72)
-                    .overlay {
-                        Image(systemName: "folder.fill")
-                            .font(.title2)
-                            .foregroundStyle(.tertiary)
-                    }
-            }
+    @ViewBuilder
+    private func folderContent(_ folder: PhotoFolder) -> some View {
+        let sortedSubfolders = store.sortFolders(folder.subfolders)
+        let isRootFolder = self.folder == nil
+        // The derivation is pure and lives with the view that draws it, so
+        // it can be pinned in a test without a live Store.
+        let album = AlbumGridRules.makePhotosAlbum(
+            for: folder,
+            isLibraryRoot: isRootFolder,
+            libraryPhotoCount: store.allPhotos.count
+        )
 
-            VStack(alignment: .leading, spacing: 4) {
-                Text(folder.name)
-                    .font(.body)
-                    .fontWeight(.medium)
-                    .lineLimit(1)
-                Text("\(folder.totalPhotoCount) photos")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
+        if album == nil && sortedSubfolders.isEmpty {
+            ContentUnavailableView(
+                "No Photos Found",
+                systemImage: "photo",
+                description: Text("This folder doesn't contain any images.")
+            )
+        } else {
+            AlbumTileGrid(
+                folder: folder,
+                photosAlbum: album,
+                subfolders: sortedSubfolders,
+                isLibraryRoot: isRootFolder
+            )
+            .refreshable {
+                await store.rescan(kind: .light)
             }
-            Spacer()
         }
-        .padding(.vertical, 4)
-        .contentShape(Rectangle())
     }
 }

@@ -17,6 +17,18 @@ final class BookmarkManager {
     /// deinit observe a stable last-written value.
     private(set) nonisolated(unsafe) var activeURL: URL?
 
+    /// True when the last `startAccessing(_:)` was **refused** by the OS.
+    ///
+    /// The distinction this carries is the difference between two failure
+    /// modes that look identical from the scanner's side: a folder that is
+    /// gone (or a provider that is offline) and a folder we are simply not
+    /// allowed to read any more. The scanner reports both the same way — the
+    /// root's listing failed — so the only place that knows the difference is
+    /// here, where the security scope was refused.
+    ///
+    /// `nil` means "not known": no scope has been attempted since launch.
+    private(set) var lastStartDenied: Bool? = nil
+
     /// No default for `bookmarkKey` — it comes from `GalleryPaths` (via the
     /// Store) so the key string lives in exactly one place.
     init(defaults: UserDefaults = .standard, bookmarkKey: String) {
@@ -41,6 +53,11 @@ final class BookmarkManager {
                 relativeTo: nil
             )
             defaults.set(bookmarkData, forKey: bookmarkKey)
+            // A new bookmark supersedes the old one, so the previous
+            // refusal no longer describes anything. Clearing it here means
+            // the next scan cannot report "access denied" on the strength of
+            // a refusal that belonged to a *different* folder.
+            lastStartDenied = nil
         } catch {
             Log.cache.error("Failed to save bookmark: \(Log.r.error(error))")
         }
@@ -71,12 +88,19 @@ final class BookmarkManager {
     /// only recorded when the start call succeeds — recording it on failure
     /// would make the next `stopAccessing()` unbalanced (a documented kernel
     /// resource leak) and hide the access failure from diagnostics.
+    ///
+    /// A refusal is recorded in `lastStartDenied` rather than being thrown
+    /// away: it is the one signal that separates "we may not read this
+    /// folder" from "this folder is gone", and the scan pipeline needs it to
+    /// pick the right empty state.
     func startAccessing(_ url: URL) {
         stopAccessing()
         guard url.startAccessingSecurityScopedResource() else {
             Log.cache.error("Security-scoped access denied for \(Log.r.path(url))")
+            lastStartDenied = true
             return
         }
+        lastStartDenied = false
         activeURL = url
     }
 

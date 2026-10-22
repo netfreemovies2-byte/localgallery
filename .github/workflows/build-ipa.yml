@@ -21,6 +21,10 @@ env:
   EXPECTED_BUNDLE_ID: com.j23n.localgallery.app
   EXPECTED_WIDGET_BUNDLE_ID: com.j23n.localgallery.app.widgets
   EXPECTED_MIN_OS: "18.0"
+  # The Home Screen name. Checked in the built product, not just in the
+  # source, so a wrong or dropped CFBundleDisplayName fails the build
+  # instead of shipping an app labelled "LocalGallery".
+  EXPECTED_DISPLAY_NAME: "Pixel Pic"
 
 jobs:
   build:
@@ -131,6 +135,15 @@ jobs:
           check "$BUNDLE_ID" "$EXPECTED_BUNDLE_ID" "CFBundleIdentifier"
           check "$PLATFORM" "iPhoneOS" "CFBundleSupportedPlatforms[0]"
           check "$MIN_OS" "$EXPECTED_MIN_OS" "MinimumOSVersion"
+          # The Home Screen label. `CFBundleDisplayName` is optional in the
+          # plist (iOS falls back to CFBundleName), so read it
+          # defensively and fail loudly if it is missing or wrong.
+          DISPLAY_NAME="$(pb CFBundleDisplayName "$PLIST" 2>/dev/null || true)"
+          if [[ "$DISPLAY_NAME" != "$EXPECTED_DISPLAY_NAME" ]]; then
+            echo "::error::CFBundleDisplayName: expected '$EXPECTED_DISPLAY_NAME', got '$DISPLAY_NAME'"
+            fail=1
+          fi
+          echo "CFBundleDisplayName=$DISPLAY_NAME"
           if [[ ! "$BUILD" =~ ^[0-9]+$ ]]; then
             echo "::error::CFBundleVersion '$BUILD' is not a number (set_build_number.sh did not run?)"
             fail=1
@@ -174,14 +187,14 @@ jobs:
           rm -rf "$IPA_DIR"
           mkdir -p "$IPA_DIR/Payload"
           ditto "$APP" "$IPA_DIR/Payload/LocalGallery.app"
-          (cd "$IPA_DIR" && /usr/bin/zip -qry -X LocalGallery.ipa Payload)
-          ls -l "$IPA_DIR/LocalGallery.ipa"
+          (cd "$IPA_DIR" && /usr/bin/zip -qry -X PixelPic.ipa Payload)
+          ls -l "$IPA_DIR/PixelPic.ipa"
 
       - name: Verify IPA contents and report signing status
         shell: bash
         run: |
           set -euo pipefail
-          IPA="$GITHUB_WORKSPACE/build/ipa/LocalGallery.ipa"
+          IPA="$GITHUB_WORKSPACE/build/ipa/PixelPic.ipa"
           test -s "$IPA"
           unzip -tq "$IPA"
 
@@ -216,6 +229,13 @@ jobs:
             echo "::error::IPA bundle id is '$IPA_BUNDLE_ID', expected '$EXPECTED_BUNDLE_ID'"
             fail=1
           fi
+          # The label the user sees on the Home Screen, read from the
+          # packaged IPA so the shipped bundle is what is checked.
+          IPA_DISPLAY_NAME="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' "$TMP/Payload/LocalGallery.app/Info.plist" 2>/dev/null || true)"
+          if [[ "$IPA_DISPLAY_NAME" != "$EXPECTED_DISPLAY_NAME" ]]; then
+            echo "::error::IPA CFBundleDisplayName is '$IPA_DISPLAY_NAME', expected '$EXPECTED_DISPLAY_NAME'"
+            fail=1
+          fi
 
           if [[ "$fail" -ne 0 ]]; then
             exit 1
@@ -226,10 +246,11 @@ jobs:
           echo "$SIGNING"
 
           {
-            echo "## LocalGallery IPA"
+            echo "## Pixel Pic IPA"
             echo
-            echo "- File: \`LocalGallery.ipa\` ($SIZE), version $VERSION ($BUILD)"
+            echo "- File: \`PixelPic.ipa\` ($SIZE), version $VERSION ($BUILD)"
             echo "- Bundle id: \`$IPA_BUNDLE_ID\`, device build (iPhoneOS, arm64), min iOS $EXPECTED_MIN_OS"
+            echo "- Home Screen name: \`$IPA_DISPLAY_NAME\`"
             echo "- Structure verified: \`Payload/LocalGallery.app\` with Info.plist, executable and widget extension"
             echo
             echo "**Signing status: UNSIGNED.** Built with code signing disabled. This is a valid package but it will"
@@ -246,8 +267,8 @@ jobs:
       - name: Upload IPA
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         with:
-          name: LocalGallery-unsigned-IPA
-          path: build/ipa/LocalGallery.ipa
+          name: PixelPic-unsigned-IPA
+          path: build/ipa/PixelPic.ipa
           if-no-files-found: error
           retention-days: 14
 

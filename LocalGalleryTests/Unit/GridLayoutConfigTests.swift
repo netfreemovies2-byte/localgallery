@@ -63,4 +63,48 @@ final class GridLayoutConfigTests: XCTestCase {
         XCTAssertEqual(GridLayoutConfig(sizeTier: 99, isLandscape: false).gridIconName,
                        "square.grid.4x3.fill")
     }
+
+    // MARK: - Density cycling
+
+    func testNextTierWalksUpAndWraps() {
+        XCTAssertEqual(GridLayoutConfig.nextTier(from: 0), 1)
+        XCTAssertEqual(GridLayoutConfig.nextTier(from: 1), 2)
+        XCTAssertEqual(GridLayoutConfig.nextTier(from: 2), 3)
+        // The last tier wraps back to the smallest rather than sticking.
+        XCTAssertEqual(GridLayoutConfig.nextTier(from: 3), 0)
+    }
+
+    func testNextTierClampsOutOfRangeInput() {
+        // A stored tier outside the table must not index past it.
+        XCTAssertEqual(GridLayoutConfig.nextTier(from: -10), 1)
+        XCTAssertEqual(GridLayoutConfig.nextTier(from: 99), 0)
+    }
+
+    func testNextTierIconDescribesTheNextDensityNotTheCurrentOne() {
+        // The button shows the density the next tap lands on.
+        let config = GridLayoutConfig(sizeTier: 1, isLandscape: false)
+        XCTAssertEqual(config.nextTierIconName,
+                       GridLayoutConfig(sizeTier: 2, isLandscape: false).gridIconName)
+        XCTAssertNotEqual(config.nextTierIconName, config.gridIconName)
+    }
+
+    func testNextTierAccessibilityLabelNamesTheNextColumnCount() {
+        // Tier 1 is 3 columns, so the button offers 4.
+        XCTAssertEqual(GridLayoutConfig(sizeTier: 1, isLandscape: false).nextTierAccessibilityLabel,
+                       "Grid size, 4 columns")
+        // Landscape has its own column table.
+        XCTAssertEqual(GridLayoutConfig(sizeTier: 1, isLandscape: true).nextTierAccessibilityLabel,
+                       "Grid size, 7 columns")
+    }
+
+    func testNextTierCyclesThroughEveryTierExactlyOnce() {
+        var seen: Set<Int> = []
+        var tier = 0
+        for _ in 0..<GridLayoutConfig.tierCount {
+            seen.insert(tier)
+            tier = GridLayoutConfig.nextTier(from: tier)
+        }
+        XCTAssertEqual(seen.count, GridLayoutConfig.tierCount)
+        XCTAssertEqual(tier, 0)
+    }
 }

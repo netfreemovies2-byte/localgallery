@@ -223,11 +223,11 @@ extension GalleryStore {
         self.scanProgress = nil
 
         // Refresh the widget snapshot after the scan/enrichment pass settles.
-        // Unlistable root keeps photos in memory but hides them in-app —
+        // An unlistable root keeps photos in memory but hides them in-app —
         // exporting those ghosts would keep the widget showing a library the
         // app just called unavailable. A *missing* root has already emptied
         // `allPhotos`, and that empty snapshot should reach the widget.
-        if !(libraryAvailability == .unavailable && !allPhotos.isEmpty) {
+        if !(libraryAvailability.hidesLibrary && !allPhotos.isEmpty) {
             exportWidgetSnapshot()
         }
 
@@ -399,15 +399,42 @@ extension GalleryStore {
             Log.scan.info("\(scanKindLabel) scan complete: library root is gone")
             self.lastSidecarManifest = previousManifest
             apply(.scanResult(photos: [], root: nil, persistCache: false))
-            libraryAvailability = .unavailable
+            libraryAvailability = .afterScan(
+                rootIsGone: true,
+                rootIsUnlistable: false,
+                accessDenied: false
+            )
         } else if rootUnlistable {
-            // PermissionDenied / I/O on the root itself. Carry-forward above
-            // already kept the cached photos; applying the empty walk would
-            // wipe them. The empty sidecar manifest is a listing failure too,
-            // not "this library has no sidecars", so roll it back.
-            Log.scan.warning("\(scanKindLabel) scan complete: library root is unreadable; keeping \(self.allPhotos.count) cached photos")
+            // The root's listing failed. Carry-forward above already kept the
+            // cached photos; applying the empty walk would wipe them. The
+            // empty sidecar manifest is a listing failure too, not "this
+            // library has no sidecars", so roll it back.
+            //
+            // Two different causes land here and they need different answers:
+            //
+            //  - The security scope was **refused** (`BookmarkManager`
+            //    recorded it). LocalGallery may not read the folder — a stale
+            //    bookmark, or a folder the user never granted us. Only the
+            //    user can fix that, so the empty state must say so rather than
+            //    sending them to retry a scan that will fail identically.
+            //  - Everything else (the folder is gone, a provider is offline,
+            //    a transient I/O error). A retry is the right answer: the
+            //    folder may well come back.
+            //
+            // Before this was split, both were `.unavailable` and the user
+            // was told to retry a scan that could not succeed.
+            let denied = bookmarks.lastStartDenied == true
+            Log.scan.warning("""
+                \(scanKindLabel) scan complete: library root is unreadable \
+                (\(denied ? "access denied" : "not found or offline")); \
+                keeping \(self.allPhotos.count) cached photos
+                """)
             self.lastSidecarManifest = previousManifest
-            libraryAvailability = .unavailable
+            libraryAvailability = .afterScan(
+                rootIsGone: false,
+                rootIsUnlistable: true,
+                accessDenied: denied
+            )
         } else if contentChanged || finalPhotos.isEmpty {
             // A completed empty walk is a real empty library — `didNotComplete`
             // and `failedDirectoryPaths` already protect transient failures,

@@ -13,6 +13,10 @@ struct PagingPhotoView: UIViewControllerRepresentable {
     @Binding var currentPhotoID: UUID
     @Binding var isChromeVisible: Bool
     @Binding var isInfoOpen: Bool
+    /// Whether the video transport bar is on screen. The viewer owns it
+    /// because the swipe-to-dismiss gesture has to leave the strip of
+    /// screen the transport occupies alone.
+    @Binding var videoTransportVisible: Bool
 
     func makeUIViewController(context: Context) -> UIPageViewController {
         let pvc = UIPageViewController(
@@ -101,7 +105,8 @@ struct PagingPhotoView: UIViewControllerRepresentable {
                 photo: photo,
                 initialThumbnail: parent.store.cachedThumbnail(for: photo.url),
                 isChromeVisible: parent.$isChromeVisible,
-                isInfoOpen: parent.$isInfoOpen
+                isInfoOpen: parent.$isInfoOpen,
+                videoTransportVisible: parent.$videoTransportVisible
             )
             .environment(parent.store)
             let controller = IndexedHostingController(photoID: photoID, rootView: AnyView(view))
