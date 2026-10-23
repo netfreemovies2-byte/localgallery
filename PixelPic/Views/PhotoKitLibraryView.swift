@@ -524,6 +524,10 @@ struct PhotoKitAlbumDetailView: View {
     // Selection mode (long-press a cell to enter).
     @State private var selection = PhotoSelectionModel()
     @State private var showSelectionDeleteConfirm = false
+    /// True while a selection delete is in flight; blocks a second
+    /// delete from starting over the first (device delete crash,
+    /// October 2026).
+    @State private var isDeleting = false
     @State private var showAlbumPicker = false
     @State private var shareItems: PhotoKitShareItems?
     @State private var isSharingSelection = false
@@ -665,6 +669,7 @@ struct PhotoKitAlbumDetailView: View {
             Button("Delete", role: .destructive) {
                 Task { await deleteSelection() }
             }
+            .disabled(isDeleting)
         } message: {
             Text("This removes them from your device's photo library. It cannot be undone.")
         }
@@ -713,7 +718,7 @@ struct PhotoKitAlbumDetailView: View {
                     editorAsset = only
                 }
             }
-            selectionAction(icon: "trash", label: "Delete", disabled: selection.isEmpty) {
+            selectionAction(icon: "trash", label: "Delete", disabled: selection.isEmpty || isDeleting) {
                 showSelectionDeleteConfirm = true
             }
         }
@@ -826,6 +831,9 @@ struct PhotoKitAlbumDetailView: View {
     }
 
     private func deleteSelection() async {
+        guard !isDeleting else { return }
+        isDeleting = true
+        defer { isDeleting = false }
         let ids = Array(selection.selectedIDs)
         let ok = await store.photoKit.delete(assetIDs: ids)
         if ok {
@@ -896,6 +904,13 @@ struct PhotoKitAlbumDetailView: View {
     }
 }
 
+/// Gesture timing for grid-cell selection.
+enum PhotoKitSelectionGesture {
+    /// How long a press must be held to enter selection mode —
+    /// one second, user-specified. Shorter holds are taps.
+    static let longPressDuration: TimeInterval = 1.0
+}
+
 /// One grid cell in the album detail grid.
 ///
 /// A standalone view rather than a helper on the detail view, so
@@ -934,8 +949,29 @@ private struct PhotoKitGridCell: View {
         }
         .opacity(selectionActive && !isSelected ? 0.75 : 1)
         .contentShape(Rectangle())
-        .onTapGesture(perform: onTap)
-        .onLongPressGesture(minimumDuration: 0.4, perform: onLongPress)
+        // One composed gesture, not two competing modifiers: the
+        // stacked .onTapGesture + .onLongPressGesture pair forced
+        // gesture arbitration inside the scrolling grid, and on
+        // device the press took ~2s to register despite the 0.4s
+        // value (October 2026). Exclusivity makes the long press
+        // the primary recognizer: it fires the moment the duration
+        // elapses, and the tap fires only when the press is
+        // released before it — so entering selection can never
+        // also open the photo.
+        .gesture(
+            LongPressGesture(minimumDuration: PhotoKitSelectionGesture.longPressDuration)
+                .exclusively(before: TapGesture())
+                .onEnded { value in
+                    switch value {
+                    case .first(true):
+                        onLongPress()
+                    case .second:
+                        onTap()
+                    case .first(false):
+                        break
+                    }
+                }
+        )
     }
 }
 
