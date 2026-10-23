@@ -362,15 +362,39 @@ final class PhotoKitService {
         options.isNetworkAccessAllowed = true
         options.deliveryMode = .automatic
 
+        Log.photokit.info("Video: player item requested")
         let outcome: AVAssetRequestOutcome = await withCheckedContinuation { continuation in
+            // PhotoKit's request callbacks are allowed to fire more
+            // than once (see ProbeResumeGuard), and resuming a
+            // checked continuation twice is a fatal runtime error —
+            // device-reproduced as an instant crash on Play
+            // (October 2026): poster fine, tap Play, app gone. The
+            // image paths guard this handoff; the video path must
+            // too. First delivery wins.
+            let resumeGuard = ProbeResumeGuard()
             PHImageManager.default().requestAVAsset(forVideo: asset, options: options) { avAsset, _, info in
+                guard resumeGuard.claim() else { return }
                 let error = info?[PHImageErrorKey] as? Error
+                if avAsset != nil {
+                    Log.photokit.info("Video: AVAsset delivered")
+                } else {
+                    Log.photokit.error("Video: AVAsset delivery failed")
+                }
                 continuation.resume(returning: AVAssetRequestOutcome(avAsset: avAsset, errorMessage: error?.localizedDescription))
             }
         }
         guard let avAsset = outcome.avAsset else {
             return (nil, outcome.errorMessage ?? "This video could not be loaded. It may still be downloading from iCloud.")
         }
+        // Hand the player only an asset it can actually play: a
+        // corrupt or unsupported file would otherwise fail deep
+        // inside AVPlayer with nothing diagnosable. The viewer's
+        // load-error state is the honest surface for it.
+        guard avAsset.isPlayable else {
+            Log.photokit.error("Video: delivered asset is not playable")
+            return (nil, "This video can't be played — its format isn't supported, or the file may be damaged.")
+        }
+        Log.photokit.info("Video: player item created")
         return (AVPlayerItem(asset: avAsset), nil)
     }
 
@@ -1119,7 +1143,7 @@ private struct AVAssetRequestOutcome: @unchecked Sendable {
 /// `PhotoKitRequestBox`, whose history in this codebase says to keep
 /// value-returning `NSLock.withLock` closures away from
 /// continuations.
-private final class ProbeResumeGuard: @unchecked Sendable {
+final class ProbeResumeGuard: @unchecked Sendable {
     private let lock = NSLock()
     private var resumed = false
 
