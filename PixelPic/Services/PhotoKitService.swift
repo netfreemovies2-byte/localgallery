@@ -277,7 +277,11 @@ final class PhotoKitService {
     /// down rather than the app decoding a full-resolution photo into
     /// memory, which is the difference between a 200 MB spike and a 4 MB
     /// one on a device with 20k photos.
-    func thumbnail(for assetID: String, size: CGFloat) async -> UIImage? {
+    func thumbnail(
+        for assetID: String,
+        size: CGFloat,
+        onDegraded: ((UIImage) -> Void)? = nil
+    ) async -> UIImage? {
         guard authorization.isReadable else { return nil }
         let scale = UIScreen.main.scale
         let key = PhotoKitThumbnailCache.key(assetID: assetID, size: size, scale: scale)
@@ -287,10 +291,20 @@ final class PhotoKitService {
         guard let image = await Self.requestImage(
             assetID: assetID,
             targetSize: CGSize(width: size * scale, height: size * scale),
-            contentMode: .aspectFill
+            contentMode: .aspectFill,
+            onDegraded: onDegraded
         ) else { return nil }
         PhotoKitThumbnailCache.shared.set(image, forKey: key)
         return image
+    }
+
+    /// The best thumbnail of this asset already decoded in memory —
+    /// at whatever size it was decoded — or nil. Synchronous: the
+    /// viewer seeds itself with this *before* its first await, so
+    /// the photo the user tapped in the grid is on screen from the
+    /// first frame instead of after a cold decode at a new size.
+    func cachedThumbnail(for assetID: String) -> UIImage? {
+        PhotoKitThumbnailCache.shared.anyImage(forAssetID: assetID)
     }
 
     /// Warm the thumbnail cache for a page of assets an album grid is
