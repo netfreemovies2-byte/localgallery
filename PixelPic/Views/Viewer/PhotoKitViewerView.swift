@@ -41,6 +41,14 @@ struct PhotoKitViewerView: View {
     @State private var videoTransportVisible = true
     @State private var dismissOffset: CGFloat = 0
     @State private var showDeleteConfirm = false
+    /// Set when the user confirms a delete: the viewer dismisses
+    /// FIRST and the deletion runs from `onDisappear`, once this
+    /// cover is gone (device delete crash, October 2026 — deleting
+    /// while still presented let the parent mutate the asset list
+    /// under the live paging controller, including emptying it).
+    @State private var pendingDeleteID: String?
+    /// Blocks a second delete while one is in flight.
+    @State private var isDeleting = false
     @State private var shareItem: ShareItem?
     @State private var isExporting = false
     @State private var shareFailed = false
@@ -146,13 +154,22 @@ struct PhotoKitViewerView: View {
         .alert(deletePromptTitle, isPresented: $showDeleteConfirm) {
             Button("Cancel", role: .cancel) { }
             Button("Delete", role: .destructive) {
-                Task {
-                    await onDelete([currentID])
-                    dismiss()
-                }
+                guard !isDeleting else { return }
+                isDeleting = true
+                pendingDeleteID = currentID
+                dismiss()
             }
         } message: {
             Text("This removes it from your device’s photo library. It cannot be undone.")
+        }
+        .onDisappear {
+            if let id = pendingDeleteID {
+                pendingDeleteID = nil
+                Task {
+                    await onDelete([id])
+                    isDeleting = false
+                }
+            }
         }
     }
 
