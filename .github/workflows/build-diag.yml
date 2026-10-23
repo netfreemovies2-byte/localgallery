@@ -100,8 +100,8 @@ jobs:
           echo "Using $TO 900 for xcodebuild"
           set +e
           "$TO" 900 xcodebuild \
-            -project "$ROOT/LocalGallery.xcodeproj" \
-            -scheme LocalGallery \
+            -project "$ROOT/PixelPic.xcodeproj" \
+            -scheme PixelPic \
             -configuration Release \
             -sdk iphoneos \
             -destination "generic/platform=iOS" \
