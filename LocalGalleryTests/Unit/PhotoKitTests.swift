@@ -2,14 +2,15 @@ import XCTest
 import Photos
 @testable import LocalGallery
 
-/// The photo-library (Camera Roll) integration.
+/// The photo-library (Albums gallery) integration.
 ///
 /// PhotoKit itself cannot be faked — a `PHAsset` only exists on a
 /// device with a photo library — so what is pinned here is everything
 /// the integration *decides* rather than reads: how the system's
 /// authorization states map onto the app's own, how albums are ordered
-/// and counted, how the timeline is grouped into months, when there is
-/// more to page in, and what the navigation route looks like.
+/// and counted, what belongs in the Camera album, how a photo list is
+/// grouped into months, when there is more to page in, and what the
+/// navigation route looks like.
 ///
 /// The value types (`PhotoKitAsset`, `PhotoKitAlbum`) are plain structs
 /// precisely so this is possible: the rules consume values, not
@@ -33,7 +34,7 @@ final class PhotoKitTests: XCTestCase {
 
     /// Only "limited" and "authorized" can actually be read.
     ///
-    /// This is the single predicate the whole Camera Roll tab hinges on:
+    /// This is the single predicate the whole gallery hinges on:
     /// a grid that renders before access is granted would show an empty
     /// library and look broken rather than unauthorized.
     func testOnlyGrantedStatesAreReadable() {
@@ -68,14 +69,34 @@ final class PhotoKitTests: XCTestCase {
 
     // MARK: - Album mapping
 
-    /// The Camera Roll's synthetic identifier.
+    /// The Camera album's synthetic identifier.
     ///
-    /// The Camera Roll is "all assets", not one `PHAssetCollection`, so
-    /// it has no identifier to fetch by — it needs a stable stand-in to
-    /// be `Identifiable` and to be routed to.
-    func testTheCameraRollHasAStableSyntheticIdentifier() {
-        XCTAssertEqual(PhotoKitAlbumID.cameraRoll, "photokit:camera-roll")
-        XCTAssertFalse(PhotoKitAlbumID.cameraRoll.isEmpty)
+    /// The Camera album is a filtered fetch, not one
+    /// `PHAssetCollection`, so it has no identifier to fetch by — it
+    /// needs a stable stand-in to be `Identifiable` and to be routed to.
+    func testTheCameraAlbumHasAStableSyntheticIdentifier() {
+        XCTAssertEqual(PhotoKitAlbumID.camera, "photokit:camera")
+        XCTAssertFalse(PhotoKitAlbumID.camera.isEmpty)
+    }
+
+    /// Camera membership: only media that originated on this device.
+    ///
+    /// Screenshots have their own album; computer-synced and
+    /// shared-album media were not captured here. Each exclusion is
+    /// pinned separately so a regression names the signal that broke.
+    func testCameraMembershipIsOnDeviceCapturesOnly() {
+        XCTAssertTrue(PhotoKitLibraryRules.isCameraCapture(
+            isScreenshot: false, isSyncedFromComputer: false, isCloudShared: false
+        ))
+        XCTAssertFalse(PhotoKitLibraryRules.isCameraCapture(
+            isScreenshot: true, isSyncedFromComputer: false, isCloudShared: false
+        ))
+        XCTAssertFalse(PhotoKitLibraryRules.isCameraCapture(
+            isScreenshot: false, isSyncedFromComputer: true, isCloudShared: false
+        ))
+        XCTAssertFalse(PhotoKitLibraryRules.isCameraCapture(
+            isScreenshot: false, isSyncedFromComputer: false, isCloudShared: true
+        ))
     }
 
     /// The count label is pluralised.
@@ -99,17 +120,16 @@ final class PhotoKitTests: XCTestCase {
         let userA = PhotoKitAlbum(id: "u1", title: "Holidays", kind: .user, count: 3, coverAssetID: nil)
         let userB = PhotoKitAlbum(id: "u2", title: "Family", kind: .user, count: 4, coverAssetID: nil)
         let shots = PhotoKitAlbum(id: "s", title: "Screenshots", kind: .screenshots, count: 9, coverAssetID: nil)
-        let roll = PhotoKitAlbum(id: PhotoKitAlbumID.cameraRoll, title: "Camera Roll", kind: .cameraRoll, count: 100, coverAssetID: nil)
-        let recents = PhotoKitAlbum(id: "r", title: "Recents", kind: .recents, count: 20, coverAssetID: nil)
+        let camera = PhotoKitAlbum(id: PhotoKitAlbumID.camera, title: "Camera", kind: .camera, count: 100, coverAssetID: nil)
         let videos = PhotoKitAlbum(id: "v", title: "Videos", kind: .videos, count: 7, coverAssetID: nil)
         let favorites = PhotoKitAlbum(id: "f", title: "Favorites", kind: .favorites, count: 2, coverAssetID: nil)
 
         let ordered = PhotoKitLibraryRules.ordered([
-            userA, videos, userB, favorites, shots, recents, roll,
+            userA, videos, userB, favorites, shots, camera,
         ])
 
         XCTAssertEqual(ordered.map(\.kind), [
-            .cameraRoll, .recents, .screenshots, .videos, .favorites, .user, .user,
+            .camera, .screenshots, .videos, .favorites, .user, .user,
         ])
     }
 
@@ -121,17 +141,17 @@ final class PhotoKitTests: XCTestCase {
         let first = PhotoKitAlbum(id: "u1", title: "First", kind: .user, count: 1, coverAssetID: nil)
         let second = PhotoKitAlbum(id: "u2", title: "Second", kind: .user, count: 1, coverAssetID: nil)
         let third = PhotoKitAlbum(id: "u3", title: "Third", kind: .user, count: 1, coverAssetID: nil)
-        let roll = PhotoKitAlbum(id: PhotoKitAlbumID.cameraRoll, title: "Camera Roll", kind: .cameraRoll, count: 1, coverAssetID: nil)
+        let camera = PhotoKitAlbum(id: PhotoKitAlbumID.camera, title: "Camera", kind: .camera, count: 1, coverAssetID: nil)
 
-        let ordered = PhotoKitLibraryRules.ordered([first, second, third, roll])
+        let ordered = PhotoKitLibraryRules.ordered([first, second, third, camera])
 
-        XCTAssertEqual(ordered.map(\.id), [PhotoKitAlbumID.cameraRoll, "u1", "u2", "u3"])
+        XCTAssertEqual(ordered.map(\.id), [PhotoKitAlbumID.camera, "u1", "u2", "u3"])
     }
 
     /// Ordering is a pure permutation — no album is lost or duplicated.
     func testOrderingKeepsEveryAlbumExactlyOnce() {
         let albums = [
-            PhotoKitAlbum(id: "a", title: "A", kind: .cameraRoll, count: 1, coverAssetID: nil),
+            PhotoKitAlbum(id: "a", title: "A", kind: .camera, count: 1, coverAssetID: nil),
             PhotoKitAlbum(id: "b", title: "B", kind: .user, count: 1, coverAssetID: nil),
             PhotoKitAlbum(id: "c", title: "C", kind: .screenshots, count: 1, coverAssetID: nil),
             PhotoKitAlbum(id: "d", title: "D", kind: .user, count: 1, coverAssetID: nil),
@@ -145,7 +165,7 @@ final class PhotoKitTests: XCTestCase {
     /// rendering failure.
     func testEveryAlbumKindHasAnIcon() {
         let kinds: [PhotoKitAlbum.Kind] = [
-            .cameraRoll, .recents, .screenshots, .videos, .favorites, .user,
+            .camera, .screenshots, .videos, .favorites, .user,
         ]
         for kind in kinds {
             XCTAssertFalse(kind.iconName.isEmpty, "\(kind) must have an icon")
@@ -156,9 +176,9 @@ final class PhotoKitTests: XCTestCase {
         XCTAssertEqual(Set(icons).count, kinds.count)
     }
 
-    // MARK: - Timeline grouping
+    // MARK: - Month grouping
 
-    func testEmptyTimelineProducesNoSections() {
+    func testEmptyPhotoListProducesNoSections() {
         XCTAssertEqual(group([]).count, 0)
     }
 
@@ -192,7 +212,7 @@ final class PhotoKitTests: XCTestCase {
         XCTAssertEqual(sections.first?.id.count, 7)
     }
 
-    /// Months come out newest-first — the timeline is sorted that way by
+    /// Months come out newest-first — the photo list is sorted that way by
     /// PhotoKit, and the grouping preserves it.
     func testSectionsAreNewestFirst() {
         let assets = [
@@ -267,12 +287,13 @@ final class PhotoKitTests: XCTestCase {
         )
     }
 
-    /// The album drill-in pages the same way the timeline does.
+    /// An album drill-in pages rather than fetching whole.
     ///
-    /// The Camera Roll album *is* the whole library, so its tile counts
-    /// every asset — and the drill-in has to be able to reach all of them,
-    /// which means paging rather than one unbounded fetch.
-    func testAlbumPagingUsesTheSameRuleAsTheTimeline() {
+    /// An album can hold most of the library — the Camera album's tile
+    /// counts every on-device capture — and the drill-in has to be able
+    /// to reach all of them, which means paging rather than one
+    /// unbounded fetch.
+    func testAlbumPagingFollowsThePageRule() {
         XCTAssertTrue(PhotoKitLibraryRules.hasMore(fetched: 600, total: 12_043))
         XCTAssertEqual(
             PhotoKitLibraryRules.pageSize(fetched: 600, total: 12_043, page: 600),
@@ -290,7 +311,7 @@ final class PhotoKitTests: XCTestCase {
     /// The "N of M" readout must report the *collection's* size, not the
     /// size of the page that was paged in.
     ///
-    /// The timeline pages in 600 at a time. Using the paged count would
+    /// The album grid pages in 600 at a time. Using the paged count would
     /// read "12 of 600" on a library holding 12,043 photos — a number
     /// that looks plausible and is wrong.
     func testTheReadoutReportsTheCollectionsSizeNotThePagedCount() {
