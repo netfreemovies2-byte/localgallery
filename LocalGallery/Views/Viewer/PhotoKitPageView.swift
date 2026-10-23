@@ -27,6 +27,7 @@ struct PhotoKitPageView: View {
     /// bar so it survives the bar being hidden and shown again.
     @State private var playbackState = VideoPlaybackState()
 
+    @ViewBuilder
     private var videoBody: some View {
         if isPlayingVideo, let player {
             // The raw player layer, not AVKit's `VideoPlayer`: `VideoPlayer`
