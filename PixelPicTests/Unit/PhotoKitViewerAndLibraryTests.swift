@@ -262,3 +262,58 @@ final class PhotoKitOperationResultTests: XCTestCase {
         XCTAssertEqual(result.failureMessage, "Boom")
     }
 }
+
+// MARK: - Viewer seed: the thumbnail cache's any-variant lookup
+
+/// Regression coverage for the device-reported black viewer
+/// (October 2026): the grid had the tapped photo decoded at cell
+/// size, but the viewer's exact-size lookup missed and the page
+/// cold-decoded in the dark. The viewer now seeds from
+/// `anyImage(forAssetID:)` — these tests pin that lookup down.
+final class PhotoKitThumbnailCacheSeedTests: XCTestCase {
+
+    private func makeImage(side: CGFloat) -> UIImage {
+        let renderer = UIGraphicsImageRenderer(size: CGSize(width: side, height: side))
+        return renderer.image { context in
+            UIColor.systemBlue.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: side, height: side))
+        }
+    }
+
+    func testAnyImageFindsVariantCachedAtADifferentSize() {
+        let cache = PhotoKitThumbnailCache.shared
+        let assetID = "seed-test-\(UUID().uuidString)"
+        // Cached the way the GRID caches: cell size, not the
+        // viewer's 600 pt — the exact-size key must not be the
+        // only way back to this bitmap.
+        cache.set(
+            makeImage(side: 120),
+            forKey: PhotoKitThumbnailCache.key(assetID: assetID, size: 196, scale: 3)
+        )
+        XCTAssertNotNil(
+            cache.anyImage(forAssetID: assetID),
+            "the viewer must be able to seed from the grid's decode"
+        )
+    }
+
+    func testAnyImageMissesForAnAssetNeverCached() {
+        XCTAssertNil(
+            PhotoKitThumbnailCache.shared.anyImage(
+                forAssetID: "seed-test-absent-\(UUID().uuidString)"
+            )
+        )
+    }
+
+    func testAnyImagePrefersTheLargestCachedVariant() {
+        let cache = PhotoKitThumbnailCache.shared
+        let assetID = "seed-test-\(UUID().uuidString)"
+        let small = makeImage(side: 60)
+        let large = makeImage(side: 240)
+        cache.set(small, forKey: PhotoKitThumbnailCache.key(assetID: assetID, size: 100, scale: 2))
+        cache.set(large, forKey: PhotoKitThumbnailCache.key(assetID: assetID, size: 600, scale: 2))
+        XCTAssertTrue(
+            cache.anyImage(forAssetID: assetID) === large,
+            "the seed should be the sharpest variant already decoded"
+        )
+    }
+}
