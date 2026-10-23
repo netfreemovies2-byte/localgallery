@@ -535,7 +535,7 @@ final class PhotoKitService {
     /// * screenshots are excluded — by this fetch's predicate, and again
     ///   by the rule, so the grid and the count can never disagree;
     /// * assets synced from a computer (iTunes/Finder) are excluded —
-    ///   their `sourceType` carries `.typeITunesSynced`;
+    ///   their `sourceType` carries `.typeiTunesSynced`;
     /// * assets from shared albums are excluded — `.typeCloudShared`.
     ///
     /// What remains is media that originated on this device. The honest
@@ -562,7 +562,7 @@ final class PhotoKitService {
     private nonisolated static func isCameraCapture(_ asset: PHAsset) -> Bool {
         PhotoKitLibraryRules.isCameraCapture(
             isScreenshot: asset.mediaSubtypes.contains(.photoScreenshot),
-            isSyncedFromComputer: asset.sourceType.contains(.typeITunesSynced),
+            isSyncedFromComputer: asset.sourceType.contains(.typeiTunesSynced),
             isCloudShared: asset.sourceType.contains(.typeCloudShared)
         )
     }
