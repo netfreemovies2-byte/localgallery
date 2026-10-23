@@ -96,6 +96,14 @@ struct PhotoKitPagingView: UIViewControllerRepresentable {
         func makeHostingController(for assetID: String) -> IndexedHostingController {
             if let cached = vcCache[assetID]?.vc { return cached }
             let assets = activeAssets
+            // Never index an empty list: deleting an album's last
+            // asset while the viewer was up could rebuild this page
+            // against zero assets, and `assets[0]` is a crash
+            // (October 2026). An empty placeholder page is the safe
+            // answer; the viewer itself is being dismissed.
+            guard !assets.isEmpty else {
+                return IndexedHostingController(assetID: assetID, rootView: AnyView(EmptyView()))
+            }
             let idx = assets.firstIndex(where: { $0.id == assetID }) ?? 0
             let asset = assets[idx]
             let view = PhotoKitPageView(
