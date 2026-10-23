@@ -13,8 +13,10 @@ import Photos
 /// pipeline.
 ///
 /// What it does carry over: pinch-to-zoom, swipe navigation, swipe-to-
-/// dismiss, a video transport with play/pause, scrubbing and mute, and a
-/// share action that exports the original bytes.
+/// dismiss, a video transport with play/pause, scrubbing and mute — plus
+/// a labelled action bar: **Share** (the original bytes, through the
+/// system share sheet), **Edit** (crop / rotate / adjustments for
+/// photos, saved as a new photo) and **Delete**.
 struct PhotoKitViewerView: View {
     /// The assets being browsed, in timeline order.
     let assets: [PhotoKitAsset]
@@ -41,6 +43,9 @@ struct PhotoKitViewerView: View {
     @State private var showDeleteConfirm = false
     @State private var shareItem: ShareItem?
     @State private var isExporting = false
+    @State private var shareFailed = false
+    @State private var showEditor = false
+    @State private var showVideoEditNotice = false
     @State private var windowInsets: EdgeInsets = .init()
 
     private var currentIndex: Int? {
@@ -76,6 +81,13 @@ struct PhotoKitViewerView: View {
                     VStack {
                         topBar
                         Spacer()
+                        bottomBar
+                            // Above the video transport when one is
+                            // showing, so the actions never sit under the
+                            // scrubber.
+                            .padding(.bottom, currentAsset?.isVideo == true && videoTransportVisible
+                                     ? 118
+                                     : windowInsets.bottom + 10)
                     }
                     .padding(.top, windowInsets.top)
                     .transition(.opacity)
@@ -115,6 +127,21 @@ struct PhotoKitViewerView: View {
         }
         .sheet(item: $shareItem) { item in
             ShareSheet(items: [item.url])
+        }
+        .sheet(isPresented: $showEditor) {
+            if let asset = currentAsset {
+                PhotoKitPhotoEditorView(asset: asset)
+            }
+        }
+        .alert("Editing Videos", isPresented: $showVideoEditNotice) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text("Pixel Pic can't edit videos yet. You can still share or delete this video.")
+        }
+        .alert("Couldn't Share", isPresented: $shareFailed) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text("This item couldn't be prepared for sharing.")
         }
         .alert(deletePromptTitle, isPresented: $showDeleteConfirm) {
             Button("Cancel", role: .cancel) { }
@@ -172,33 +199,60 @@ struct PhotoKitViewerView: View {
 
             Spacer()
 
-            Button {
-                Task { await exportCurrent() }
-            } label: {
-                Image(systemName: "square.and.arrow.up")
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .frame(width: 34, height: 34)
-                    .background(.black.opacity(0.35), in: Circle())
-            }
-            .disabled(isExporting)
-            .accessibilityLabel("Share")
-
-            if currentAsset != nil {
-                Button {
-                    showDeleteConfirm = true
-                } label: {
-                    Image(systemName: "trash")
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(.white)
-                        .frame(width: 34, height: 34)
-                        .background(.black.opacity(0.35), in: Circle())
-                }
-                .accessibilityLabel("Delete")
-            }
+            // A fixed-width spacer where the actions used to sit, so the
+            // counter stays centred now that Share / Edit / Delete live
+            // in the labelled bottom bar.
+            Color.clear
+                .frame(width: 34, height: 34)
         }
         .padding(.horizontal, 16)
         .padding(.top, 8)
+    }
+
+    // MARK: - Action bar
+
+    /// The viewer's actions, labelled, along the bottom: Share, Edit,
+    /// Delete. Labelled rather than icon-only — an unlabelled share
+    /// glyph in a corner is exactly how these actions went undiscovered.
+    private var bottomBar: some View {
+        HStack(spacing: 10) {
+            viewerAction(icon: "square.and.arrow.up", label: "Share", disabled: isExporting) {
+                Task { await exportCurrent() }
+            }
+            viewerAction(icon: "crop", label: "Edit", disabled: currentAsset == nil) {
+                if currentAsset?.isVideo == true {
+                    showVideoEditNotice = true
+                } else {
+                    showEditor = true
+                }
+            }
+            viewerAction(icon: "trash", label: "Delete", disabled: currentAsset == nil) {
+                showDeleteConfirm = true
+            }
+        }
+        .padding(.horizontal, 16)
+    }
+
+    private func viewerAction(
+        icon: String,
+        label: String,
+        disabled: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            VStack(spacing: 3) {
+                Image(systemName: icon)
+                    .font(.system(size: 16, weight: .semibold))
+                Text(label)
+                    .font(.system(size: 11, weight: .semibold))
+            }
+            .foregroundStyle(.white)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 8)
+            .background(.black.opacity(0.35), in: RoundedRectangle(cornerRadius: 12))
+        }
+        .disabled(disabled)
+        .accessibilityLabel(label)
     }
 
     // MARK: - Export
@@ -207,7 +261,12 @@ struct PhotoKitViewerView: View {
         guard let asset = currentAsset else { return }
         isExporting = true
         defer { isExporting = false }
-        guard let url = await store.photoKit.exportToTemporaryFile(for: asset.id) else { return }
+        guard let url = await store.photoKit.exportToTemporaryFile(for: asset.id) else {
+            // Say so — a share button that silently does nothing reads
+            // as a broken button.
+            shareFailed = true
+            return
+        }
         shareItem = ShareItem(url: url)
     }
 
