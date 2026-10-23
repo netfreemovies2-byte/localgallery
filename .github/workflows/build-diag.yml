@@ -1,0 +1,131 @@
+name: Diagnose Swift compile (time-boxed)
+
+# Temporary diagnostic workflow for the Pixel Pic CI compile stall.
+# It replicates the xcodebuild step of build-ipa.yml (same overrides)
+# but caps the compile at 15 minutes and always uploads the log, so a
+# hanging configuration costs ~20 minutes of CI instead of 90.
+# It also adds -debug-time-compilation (per-invocation phase split:
+# type-check vs SILGen vs SILOpt vs IRGen) alongside the existing
+# -debug-time-function-bodies output.
+#
+# Optional bisect: set the `exclude_files` dispatch input to a
+# comma-separated list of repo-relative Swift files to DELETE from the
+# checkout before building. References to deleted types then fail type
+# checking FAST (visible errors within minutes); if the build instead
+# hangs silently again, the pathological file is outside the deleted
+# set. Either outcome is information. Leave empty for a clean run.
+
+on:
+  workflow_dispatch:
+    inputs:
+      exclude_files:
+        description: "Comma-separated repo-relative .swift files to delete before building (bisect only)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-diag-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  LANG: en_US.UTF-8
+  LC_ALL: en_US.UTF-8
+  LANGUAGE: en_US:en
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  XCODE_VERSION: "26.6"
+
+jobs:
+  diag:
+    runs-on: macos-26
+    timeout-minutes: 30
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Select Xcode
+        uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1.7.0
+        with:
+          xcode-version: "${{ env.XCODE_VERSION }}"
+
+      - name: Install Rust toolchain and iOS targets
+        uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0 # 2026-09-03
+        with:
+          toolchain: "1.97.1"
+          targets: aarch64-apple-darwin,aarch64-apple-ios,aarch64-apple-ios-sim
+
+      - name: Show toolchain versions
+        run: |
+          xcodebuild -version
+          rustc --version
+          cargo --version
+
+      - name: Install pinned XcodeGen
+        run: /bin/bash scripts/install_xcodegen.sh
+
+      - name: Stage model pack (optional)
+        run: /bin/bash scripts/prepare_pack.sh --optional
+
+      - name: Build Rust bindings and XCFramework
+        run: /bin/bash scripts/build_core.sh --release
+
+      - name: Bisect - delete excluded files (optional)
+        if: ${{ inputs.exclude_files != '' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          IFS=',' read -ra FILES <<< "${{ inputs.exclude_files }}"
+          for f in "${FILES[@]}"; do
+            f="$(echo "$f" | xargs)"
+            echo "Deleting $f"
+            rm -f "$f"
+          done
+
+      - name: Generate Xcode project
+        run: xcodegen
+
+      - name: Compile (time-boxed to 15 minutes)
+        shell: bash
+        run: |
+          ROOT="$GITHUB_WORKSPACE"
+          DERIVED="$ROOT/build/DerivedData"
+          rm -rf "$DERIVED"
+          mkdir -p "$ROOT/build"
+          if command -v gtimeout >/dev/null 2>&1; then TO=gtimeout; else TO=timeout; fi
+          echo "Using $TO 900 for xcodebuild"
+          set +e
+          "$TO" 900 xcodebuild \
+            -project "$ROOT/LocalGallery.xcodeproj" \
+            -scheme LocalGallery \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination "generic/platform=iOS" \
+            -derivedDataPath "$DERIVED" \
+            -showBuildTimingSummary \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            SWIFT_COMPILATION_MODE=singlefile \
+            SWIFT_OPTIMIZATION_LEVEL=-Onone \
+            OTHER_SWIFT_FLAGS="-Xfrontend -debug-time-function-bodies -Xfrontend -debug-time-compilation" \
+            build 2>&1 | tee "$ROOT/xcodebuild-build.log"
+          XC=${PIPESTATUS[0]}
+          set -e
+          echo "xcodebuild exit code: $XC (124 = killed by the 15-minute time box)"
+          # Keep the job green so the log upload below is the result;
+          # the step summary carries the verdict.
+          echo "### Diagnostic compile exit code: $XC" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload diagnostic build log
+        if: always()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: xcodebuild-diag-log
+          path: xcodebuild-build.log
+          if-no-files-found: warn
+          retention-days: 14
