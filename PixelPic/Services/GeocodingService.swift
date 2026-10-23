@@ -136,7 +136,7 @@ final class GeocodingService {
     nonisolated static func isEligible(_ photo: PhotoFile, force: Bool = false) -> Bool {
         guard isCandidate(photo) else { return false }
         if force { return true }
-        return LocalGallery.placesStillNeeded(tags: placeTags(for: photo).map(\.fullPath))
+        return placesStillNeeded(tags: placeTags(for: photo).map(\.fullPath))
     }
 
     /// Downloaded still with GPS. No sidecar I/O — safe on the main actor
@@ -161,7 +161,7 @@ final class GeocodingService {
 
     /// Sidecar has no finished `Places/…/City` path. Reads the file.
     nonisolated static func placesStillNeeded(_ photo: PhotoFile) -> Bool {
-        LocalGallery.placesStillNeeded(tags: placeTags(for: photo).map(\.fullPath))
+        placesStillNeeded(tags: placeTags(for: photo).map(\.fullPath))
     }
 
     /// Places tags from the sidecar. No sidecar ⇒ none, so a write-path
