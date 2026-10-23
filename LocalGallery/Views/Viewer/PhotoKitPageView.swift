@@ -30,55 +30,87 @@ struct PhotoKitPageView: View {
     @ViewBuilder
     private var videoBody: some View {
         if isPlayingVideo, let player {
-            // The raw player layer, not AVKit's `VideoPlayer`: `VideoPlayer`
-            // brings its own transport controls, which would sit on top of
-            // the app's transport bar and give the user two scrubbers
-            // fighting over the same gesture.
-            AVPlayerLayerView(player: player)
-                .contentShape(Rectangle())
-                .onTapGesture {
-                    withAnimation(.easeInOut(duration: 0.2)) {
-                        videoTransportVisible.toggle()
-                    }
-                }
-                .overlay(alignment: .bottom) {
-                    if videoTransportVisible {
-                        VideoTransportBar(state: playbackState)
-                            .padding(.horizontal, 16)
-                            .padding(.bottom, 24)
-                            .transition(.opacity)
-                    }
-                }
+            playingVideoBody(player: player)
         } else {
-            ZStack {
-                if let thumbnail {
-                    Image(uiImage: thumbnail)
-                        .resizable()
-                        .aspectRatio(contentMode: .fit)
-                } else {
-                    ProgressView().tint(.white)
+            videoThumbnailBody
+        }
+    }
+
+    /// The playing-video branch of `videoBody`, split out so each view
+    /// builder type-checks a single, small expression. Compilation of this
+    /// file stalled in CI when these branches were one large builder
+    /// (runs 39876929274 and 39897984214 both stop at this file), so the
+    /// builders here are kept deliberately small and separate.
+    private func playingVideoBody(player: AVPlayer) -> some View {
+        // The raw player layer, not AVKit's `VideoPlayer`: `VideoPlayer`
+        // brings its own transport controls, which would sit on top of
+        // the app's transport bar and give the user two scrubbers
+        // fighting over the same gesture.
+        AVPlayerLayerView(player: player)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    videoTransportVisible.toggle()
                 }
-                Button {
-                    startVideo()
-                } label: {
-                    Image(systemName: "play.circle.fill")
-                        .font(.system(size: 64))
-                        .foregroundStyle(.white.opacity(0.9))
-                        .shadow(radius: 8)
+            }
+            .overlay(alignment: .bottom) {
+                if videoTransportVisible {
+                    VideoTransportBar(state: playbackState)
+                        .padding(.horizontal, 16)
+                        .padding(.bottom, 24)
+                        .transition(.opacity)
                 }
+            }
+    }
+
+    /// The not-yet-playing branch of `videoBody`: thumbnail (or spinner)
+    /// with the play button.
+    private var videoThumbnailBody: some View {
+        ZStack {
+            if let thumbnail {
+                Image(uiImage: thumbnail)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+            } else {
+                ProgressView().tint(.white)
+            }
+            Button {
+                startVideo()
+            } label: {
+                Image(systemName: "play.circle.fill")
+                    .font(.system(size: 64))
+                    .foregroundStyle(.white.opacity(0.9))
+                    .shadow(radius: 8)
             }
         }
     }
 
+    /// The page's media content — video or photo — before geometry and
+    /// gestures are applied in `body`.
+    @ViewBuilder
+    private var mediaBody: some View {
+        if asset.isVideo {
+            videoBody
+        } else {
+            photoBody
+        }
+    }
+
+    /// Live-photo long-press recognised. See the gesture comment in
+    /// `body` for why playback starts here and never in the pressing
+    /// callback.
+    private func handleLivePhotoLongPress() {
+        guard asset.isLivePhoto, !isZoomed else { return }
+        Task { await startLivePlayback() }
+    }
+
+    private func handlePressingChanged(_ pressing: Bool) {
+        if !pressing { stopLivePlayback() }
+    }
+
     var body: some View {
         GeometryReader { geo in
-            ZStack {
-                if asset.isVideo {
-                    videoBody
-                } else {
-                    photoBody
-                }
-            }
+            mediaBody
             .frame(width: geo.size.width, height: geo.size.height)
             // Live-photo press-and-hold. The `pressing` callback fires
             // *immediately* on touch start (before `minimumDuration`), so
@@ -90,13 +122,8 @@ struct PhotoKitPageView: View {
             .onLongPressGesture(
                 minimumDuration: 0.3,
                 maximumDistance: 50,
-                perform: {
-                    guard asset.isLivePhoto, !isZoomed else { return }
-                    Task { await startLivePlayback() }
-                },
-                onPressingChanged: { pressing in
-                    if !pressing { stopLivePlayback() }
-                }
+                perform: handleLivePhotoLongPress,
+                onPressingChanged: handlePressingChanged
             )
         }
         .task(id: asset.id) {
@@ -132,10 +159,15 @@ struct PhotoKitPageView: View {
             ProgressView().tint(.white)
         }
 
-        // Live photo motion overlay. The still underneath is dimmed while
-        // the motion plays — the system Photos app does the same, and
-        // without it the two images fight for the eye and the motion
-        // looks like a glitch rather than a live photo.
+        livePhotoOverlay
+    }
+
+    /// Live photo motion overlay. The still underneath is dimmed while
+    /// the motion plays — the system Photos app does the same, and
+    /// without it the two images fight for the eye and the motion
+    /// looks like a glitch rather than a live photo.
+    @ViewBuilder
+    private var livePhotoOverlay: some View {
         if isPlayingLive, let livePlayer {
             AVPlayerLayerView(player: livePlayer)
                 .allowsHitTesting(false)
