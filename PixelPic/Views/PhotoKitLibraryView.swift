@@ -566,7 +566,24 @@ struct PhotoKitAlbumDetailView: View {
                 } else {
                     LazyVGrid(columns: grid.columns(for: width), spacing: 2) {
                         ForEach(assets) { asset in
-                            cell(for: asset, size: cell)
+                            PhotoKitGridCell(
+                                asset: asset,
+                                size: cell,
+                                isSelected: selection.contains(asset.id),
+                                selectionActive: selection.isActive,
+                                onTap: {
+                                    if selection.isActive {
+                                        selection.toggle(asset.id)
+                                    } else {
+                                        onOpen(asset, assets, currentCount)
+                                    }
+                                },
+                                onLongPress: {
+                                    if !selection.isActive {
+                                        selection.begin(with: asset.id)
+                                    }
+                                }
+                            )
                         }
                     }
                     // Paging: the last cell pulls the next page in. An
@@ -681,45 +698,6 @@ struct PhotoKitAlbumDetailView: View {
     /// One grid cell, selection-aware: a long-press enters
     /// selection mode; in selection mode a tap toggles instead of
     /// opening; selected cells carry a checkmark badge and a ring.
-    private func cell(for asset: PhotoKitAsset, size cell: CGFloat) -> some View {
-        let isSelected = selection.contains(asset.id)
-        return PhotoKitThumbnailView(
-            assetID: asset.id,
-            size: cell,
-            isVideo: asset.isVideo,
-            isLivePhoto: asset.isLivePhoto
-        )
-        .frame(width: cell, height: cell)
-        .overlay(alignment: .topTrailing) {
-            if selection.isActive {
-                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                    .font(.system(size: 21))
-                    .foregroundStyle(isSelected ? Design.accentColor : .white)
-                    .shadow(color: .black.opacity(0.45), radius: 2)
-                    .padding(4)
-            }
-        }
-        .overlay {
-            if isSelected {
-                Rectangle().strokeBorder(Design.accentColor, lineWidth: 2.5)
-            }
-        }
-        .opacity(selection.isActive && !isSelected ? 0.75 : 1)
-        .contentShape(Rectangle())
-        .onTapGesture {
-            if selection.isActive {
-                selection.toggle(asset.id)
-            } else {
-                onOpen(asset, assets, currentCount)
-            }
-        }
-        .onLongPressGesture(minimumDuration: 0.4) {
-            if !selection.isActive {
-                selection.begin(with: asset.id)
-            }
-        }
-    }
-
     /// The selection action bar: Share, Add to Album, Delete, and —
     /// with exactly one photo selected — Edit.
     private var selectionActionBar: some View {
@@ -915,6 +893,49 @@ struct PhotoKitAlbumDetailView: View {
         )
         assets = page
         hasReachedTheEnd = page.isEmpty && currentCount > 0
+    }
+}
+
+/// One grid cell in the album detail grid.
+///
+/// A standalone view rather than a helper on the detail view, so
+/// the type checker prices this modifier chain once, on its own:
+/// inlined into the grid's ForEach as a `some View` helper it timed
+/// out the Release type-checker (PhotoKitLibraryView.swift:569).
+private struct PhotoKitGridCell: View {
+    let asset: PhotoKitAsset
+    let size: CGFloat
+    let isSelected: Bool
+    let selectionActive: Bool
+    let onTap: () -> Void
+    let onLongPress: () -> Void
+
+    var body: some View {
+        PhotoKitThumbnailView(
+            assetID: asset.id,
+            size: size,
+            isVideo: asset.isVideo,
+            isLivePhoto: asset.isLivePhoto
+        )
+        .frame(width: size, height: size)
+        .overlay(alignment: .topTrailing) {
+            if selectionActive {
+                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                    .font(.system(size: 21))
+                    .foregroundStyle(isSelected ? Design.accentColor : .white)
+                    .shadow(color: .black.opacity(0.45), radius: 2)
+                    .padding(4)
+            }
+        }
+        .overlay {
+            if isSelected {
+                Rectangle().strokeBorder(Design.accentColor, lineWidth: 2.5)
+            }
+        }
+        .opacity(selectionActive && !isSelected ? 0.75 : 1)
+        .contentShape(Rectangle())
+        .onTapGesture(perform: onTap)
+        .onLongPressGesture(minimumDuration: 0.4, perform: onLongPress)
     }
 }
 
