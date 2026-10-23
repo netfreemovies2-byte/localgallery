@@ -2,42 +2,40 @@ import SwiftUI
 import Photos
 import UIKit
 
-/// The Camera Roll tab: the device's own photo library.
+/// The app's one main screen: the device's own photo library, as an
+/// Albums grid.
 ///
-/// Two top-level screens, switched by a segmented control, the way the
-/// system Photos app splits "Library" (the timeline) from "Albums":
+/// This is the screen the app opens to. There is no tab bar and no
+/// other top-level section: one grid of albums — Camera, Screenshots,
+/// Videos, Favorites and the user's own albums — each tile a cover, a
+/// name and a count, and tapping a tile opens that album's photos and
+/// videos in a grid. The look follows the classic QuickPic layout the
+/// redesign is modelled on, in Pixel Pic's own dark appearance with its
+/// orange accent.
 ///
-/// * **Library** — every asset, newest first, grouped by month.
-/// * **Albums** — Camera Roll, Recents, Screenshots, Videos, Favorites
-///   and the user's own albums, each with a cover and a count.
-///
-/// Underneath both, three states that have to be told apart because
+/// Underneath the grid, three states that have to be told apart because
 /// their *recovery* differs: the user has not been asked yet (ask), the
 /// user said no (open Settings), and the device is restricted (nothing
-/// the app can do). The states are the *only* thing the tab shows until
-/// access is granted — a grid rendered before the prompt is answered
-/// would look like an empty library rather than an unauthorized one.
+/// the app can do). The states are the *only* thing the screen shows
+/// until access is granted — a grid rendered before the prompt is
+/// answered would look like an empty library rather than an
+/// unauthorized one.
 ///
-/// The folder-based library lives in the Photos tab and is untouched by
-/// any of this.
+/// New media appears on its own: `PhotoKitService` observes the Photos
+/// library, so a screenshot taken while the app is open updates the
+/// album counts here and reloads an open album's grid — no relaunch,
+/// no pull-to-refresh.
 struct PhotoKitLibraryView: View {
-    /// The two halves of the tab.
-    enum Mode: String, CaseIterable, Identifiable {
-        case library = "Library"
-        case albums = "Albums"
-        var id: String { rawValue }
-    }
-
     @Environment(GalleryStore.self) private var store
     @Environment(\.openURL) private var openURL
     @Environment(\.scenePhase) private var scenePhase
 
-    @State private var mode: Mode = .library
     @State private var viewerAssets: [PhotoKitAsset] = []
     @State private var viewerAsset: PhotoKitAsset?
     /// How many assets the browsed collection holds in total, for the
     /// viewer's "N of M" readout. `nil` means "fall back to the list".
     @State private var viewerTotalCount: Int?
+    @State private var showSettings = false
 
     var body: some View {
         Group {
@@ -53,7 +51,7 @@ struct PhotoKitLibraryView: View {
             }
         }
         .background(Design.bg)
-        // Attached inside the tab's `NavigationStack` (see
+        // Attached inside the app's one `NavigationStack` (see
         // `LocalGalleryApp`), so the album drill-in pushes onto the
         // router's photo-library path rather than onto a second stack of
         // this view's own.
@@ -65,19 +63,25 @@ struct PhotoKitLibraryView: View {
                 }
             }
         }
-        .navigationTitle("Camera Roll")
+        .navigationTitle("Albums")
         .navigationBarTitleDisplayMode(.large)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                SettingsToolbarButton(isPresented: $showSettings)
+            }
+        }
+        .sheet(isPresented: $showSettings) { SettingsView() }
         .task {
-            // Only the first load. The pull-to-refresh and the
-            // after-a-delete reload both call `loadLibrary()` directly, and
-            // re-reading the whole library on every tab switch would be
-            // wasted work.
+            // Only the first load. Pull-to-refresh, the library-change
+            // observer and the after-a-delete reload all refresh after
+            // this, and re-reading the whole library on every appearance
+            // would be wasted work.
             if !store.photoKit.hasLoaded {
                 await store.photoKit.loadLibrary()
             }
         }
         // The user can grant access in Settings while the app is in the
-        // background. The tab's `.task` has already run by then, so the
+        // background. The view's `.task` has already run by then, so the
         // state would still read "denied" until the app is killed. This
         // re-reads the status whenever the app comes back to the front.
         .onChange(of: scenePhase) { _, phase in
@@ -96,8 +100,8 @@ struct PhotoKitLibraryView: View {
                 assets: viewerAssets,
                 currentAssetID: asset.id,
                 // The browsed collection's own count, so "N of M" is the
-                // library's (or the album's) size and not the size of the
-                // page that was paged in.
+                // album's size and not the size of the page that was
+                // paged in.
                 totalCount: viewerTotalCount,
                 onDelete: { ids in
                     await store.photoKit.delete(assetIDs: ids)
@@ -111,33 +115,48 @@ struct PhotoKitLibraryView: View {
     @ViewBuilder
     private var readyBody: some View {
         VStack(spacing: 0) {
-            Picker("View", selection: $mode) {
-                ForEach(Mode.allCases) { m in
-                    Text(m.rawValue).tag(m)
-                }
+            if store.photoKit.authorization == .limited {
+                limitedBanner
             }
-            .pickerStyle(.segmented)
-            .padding(.horizontal, 16)
-            .padding(.bottom, 8)
 
             if store.photoKit.isLoading && store.photoKit.albums.isEmpty {
                 ProgressView("Loading…")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if store.photoKit.hasLoaded
+                        && store.photoKit.albums.allSatisfy({ $0.count == 0 }) {
+                ContentUnavailableView(
+                    "No Photos",
+                    systemImage: "photo.stack",
+                    description: Text("There are no photos or videos on this device yet. New photos and screenshots will appear here automatically.")
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                switch mode {
-                case .library:
-                    PhotoKitTimelineView { asset in
-                        openViewer(
-                            at: asset,
-                            in: store.photoKit.cameraRoll,
-                            total: store.photoKit.totalAssetCount
-                        )
-                    }
-                case .albums:
-                    PhotoKitAlbumGrid()
-                }
+                PhotoKitAlbumGrid()
             }
         }
+    }
+
+    /// Limited access is readable, but only for the subset the user
+    /// picked. Say so on the gallery itself — otherwise an album that
+    /// looks short reads as a bug rather than as the user's own choice —
+    /// and give the way back to the system setting.
+    private var limitedBanner: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "photo.badge.exclamationmark")
+                .foregroundStyle(Design.ink2)
+            Text("Limited access — showing the photos you selected.")
+                .font(.footnote)
+                .foregroundStyle(Design.ink2)
+            Spacer()
+            Button("Manage") {
+                guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
+                openURL(url)
+            }
+            .font(.footnote.weight(.semibold))
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .background(Design.bgGrouped)
     }
 
     // MARK: - States
@@ -146,7 +165,7 @@ struct PhotoKitLibraryView: View {
         LibraryEmptyState(
             icon: "photo.on.rectangle.angled",
             title: "Access Your Photos",
-            message: "Pixel Pic can show the photos already on this device — the camera roll, screenshots and your own albums. Nothing is uploaded.",
+            message: "Pixel Pic shows the photos already on this device — your Camera, Screenshots and your own albums. Nothing is uploaded.",
             retryTitle: "Continue",
             onRetry: {
                 Task {
@@ -188,11 +207,10 @@ struct PhotoKitLibraryView: View {
 
     /// Open the viewer on `asset`, browsing `assets`.
     ///
-    /// `total` is the size of the *collection* being browsed — the whole
-    /// library for the timeline, one album for the drill-in. It is separate
-    /// from `assets.count` because the browsed list is usually a page of a
-    /// much larger collection, and "12 of 600" when the library holds
-    /// 12,043 photos would be a lie.
+    /// `total` is the size of the *collection* being browsed — one album
+    /// for a drill-in. It is separate from `assets.count` because the
+    /// browsed list is usually a page of a much larger collection, and
+    /// "12 of 600" when the album holds 12,043 photos would be a lie.
     private func openViewer(at asset: PhotoKitAsset, in assets: [PhotoKitAsset], total: Int?) {
         viewerAssets = assets.isEmpty ? [asset] : assets
         viewerTotalCount = total
@@ -200,108 +218,19 @@ struct PhotoKitLibraryView: View {
     }
 }
 
-// MARK: - Timeline
+// MARK: - Month grouping
 
-/// Every asset, newest first, grouped by month.
+/// One month of a photo list.
 ///
-/// The month grouping is the same shape as the folder grid's: a caption
-/// per month, then a dense grid of cells. Grouping happens over the
-/// *fetched* assets only, so a library that has not been paged in yet
-/// shows the months that have arrived — which is what the user sees
-/// anyway.
-struct PhotoKitTimelineView: View {
-    /// Called when the user taps an asset.
-    let onOpen: (PhotoKitAsset) -> Void
-
-    @Environment(GalleryStore.self) private var store
-
-    @AppStorage("gridSizeTier") private var sizeTier: Int = 0
-    @Environment(\.verticalSizeClass) private var verticalSizeClass
-
-    @State private var sections: [PhotoKitSection] = []
-
-    private var grid: GridLayoutConfig {
-        GridLayoutConfig(sizeTier: sizeTier, isLandscape: verticalSizeClass == .compact)
-    }
-
-    var body: some View {
-        GeometryReader { geo in
-            let width = geo.size.width
-            let cell = grid.cellSize(for: width)
-
-            ScrollView {
-                if store.photoKit.cameraRoll.isEmpty {
-                    ContentUnavailableView(
-                        "No Photos",
-                        systemImage: "photo.stack",
-                        description: Text("There are no photos on this device yet.")
-                    )
-                    .padding(.top, 48)
-                } else {
-                    LazyVGrid(columns: grid.columns(for: width), spacing: 2) {
-                        ForEach(sections) { section in
-                            Section {
-                                ForEach(section.assets) { asset in
-                                    PhotoKitThumbnailView(
-                                        assetID: asset.id,
-                                        size: cell,
-                                        isVideo: asset.isVideo,
-                                        isLivePhoto: asset.isLivePhoto
-                                    )
-                                    .frame(width: cell, height: cell)
-                                    .contentShape(Rectangle())
-                                    .onTapGesture { onOpen(asset) }
-                                }
-                            } header: {
-                                PhotoKitSectionHeader(title: section.title)
-                                    .id(section.id)
-                            }
-                        }
-                    }
-                    // Paging: the last cell of the last section pulls the
-                    // next page in when it appears. A device can hold
-                    // 100k assets, and fetching them all up front would
-                    // stall the first paint for seconds.
-                    if store.photoKit.hasMoreToLoad {
-                        Color.clear
-                            .frame(height: 1)
-                            .onAppear {
-                                Task { await store.photoKit.loadMoreCameraRoll() }
-                            }
-                    }
-                }
-            }
-            .refreshable {
-                await store.photoKit.loadLibrary()
-            }
-            .overlay(alignment: .bottom) {
-                if store.photoKit.isLoading {
-                    ProgressView()
-                        .padding(.bottom, 12)
-                }
-            }
-        }
-        // Keyed on the *asset list*, not its count: a library where one
-        // photo was deleted and another added keeps its count, and the
-        // sections would then be stale — a deleted photo would still be
-        // listed and a new one missing.
-        .task(id: store.photoKit.cameraRoll) {
-            sections = PhotoKitSection.group(store.photoKit.cameraRoll)
-        }
-    }
-}
-
-/// One month of the timeline.
+/// A top-level type rather than a member of a view so a test can pin the
+/// grouping without an actor hop — the same reason `PhotoSection` (the
+/// folder grid's) is a top-level struct.
 struct PhotoKitSection: Identifiable {
     let id: String
     let title: String
     let assets: [PhotoKitAsset]
 
     /// Group a newest-first asset list by month.
-    ///
-    /// A top-level type rather than a member of the view so a test can
-    /// pin the grouping without an actor hop — the same reason
-    /// `PhotoSection` (the folder grid's) is a top-level struct.
     ///
     /// The calendar is a parameter because "which month" is a question
     /// with a time-zone answer: the section headings must follow the
@@ -363,12 +292,12 @@ struct PhotoKitSection: Identifiable {
 
 // MARK: - Album detail (one album's assets)
 
-/// One album's assets, in chronological order.
+/// One album's assets, newest first, in a grid.
 struct PhotoKitAlbumDetailView: View {
     let album: PhotoKitAlbum
     /// Called when the user taps an asset to open the viewer. The album's
     /// own asset list is passed along so the viewer pages through *this
-    /// album*, not through the whole timeline, and the album's own count
+    /// album*, not through the whole library, and the album's own count
     /// so the viewer's "N of M" is the album's size rather than the size
     /// of the page that was paged in.
     let onOpen: (PhotoKitAsset, [PhotoKitAsset], Int) -> Void
@@ -376,15 +305,21 @@ struct PhotoKitAlbumDetailView: View {
     @Environment(GalleryStore.self) private var store
 
     @State private var assets: [PhotoKitAsset] = []
+    /// The album's live count. Seeded from the tile's snapshot and
+    /// refreshed whenever the library changes, so the paging sentinel
+    /// and the viewer's "N of M" follow the library rather than the
+    /// moment the tile was tapped.
+    @State private var currentCount: Int = 0
     @State private var isLoading = true
     @State private var isLoadingMore = false
     /// Set when a page came back empty.
     ///
-    /// The album's count was read when the albums were enumerated, and the
-    /// library can shrink in between (the user deletes a photo from another
-    /// app). The count would then stay above the number of assets actually
-    /// reachable, and the paging sentinel would keep asking for a page
-    /// that no longer exists. An empty page ends the paging instead.
+    /// The album's count was read when the albums were enumerated, and
+    /// the library can shrink in between (the user deletes a photo from
+    /// another app). The count would then stay above the number of
+    /// assets actually reachable, and the paging sentinel would keep
+    /// asking for a page that no longer exists. An empty page ends the
+    /// paging instead.
     @State private var hasReachedTheEnd = false
 
     /// Grid density tier, shared with the folder grid's convention.
@@ -397,11 +332,11 @@ struct PhotoKitAlbumDetailView: View {
 
     /// Whether the album has more assets than have been fetched.
     ///
-    /// The album's tile carries PhotoKit's own count, which is exact without
+    /// The album's count comes from PhotoKit, which is exact without
     /// loading the assets — so the sentinel knows when to disappear
-    /// without having the whole library in memory.
+    /// without having the whole album in memory.
     private var hasMore: Bool {
-        !hasReachedTheEnd && assets.count < album.count
+        !hasReachedTheEnd && assets.count < currentCount
     }
 
     var body: some View {
@@ -431,12 +366,12 @@ struct PhotoKitAlbumDetailView: View {
                             )
                             .frame(width: cell, height: cell)
                             .contentShape(Rectangle())
-                            .onTapGesture { onOpen(asset, assets, album.count) }
+                            .onTapGesture { onOpen(asset, assets, currentCount) }
                         }
                     }
-                    // Paging: the last cell pulls the next page in. The
-                    // Camera Roll album is the whole library, so without
-                    // this a 100k-photo device would have to hold every
+                    // Paging: the last cell pulls the next page in. An
+                    // album can hold most of a 100k-photo library, so
+                    // without this the grid would have to hold every
                     // asset to render its first screen.
                     if hasMore {
                         Color.clear
@@ -454,6 +389,16 @@ struct PhotoKitAlbumDetailView: View {
                         .padding(.bottom, 12)
                 }
             }
+            // Warm the thumbnails of the page just loaded, ahead of the
+            // scroll. Keyed on the last asset, so it re-runs when a new
+            // page lands (or a library change replaces the list) and not
+            // on every render.
+            .task(id: assets.last?.id) {
+                await store.photoKit.preheatThumbnails(
+                    for: assets.map(\.id),
+                    size: cell
+                )
+            }
         }
         .background(Design.bg)
         .navigationTitle(album.title)
@@ -469,7 +414,15 @@ struct PhotoKitAlbumDetailView: View {
             }
         }
         .task {
+            currentCount = album.count
             await load()
+        }
+        // A photo or screenshot taken while this album is open: the
+        // service has already refreshed the album list, so re-read the
+        // count and reload the visible page — the new item is newest,
+        // so it lands at the top of the grid without a manual refresh.
+        .onChange(of: store.photoKit.libraryChangeToken) { _, _ in
+            Task { await reloadAfterLibraryChange() }
         }
     }
 
@@ -479,9 +432,9 @@ struct PhotoKitAlbumDetailView: View {
         assets = await store.photoKit.albumPage(
             album,
             offset: 0,
-            limit: PhotoKitService.initialCameraRollLimit
+            limit: PhotoKitService.initialAlbumLimit
         )
-        if assets.count < album.count, assets.isEmpty {
+        if assets.count < currentCount, assets.isEmpty {
             hasReachedTheEnd = true
         }
         isLoading = false
@@ -494,7 +447,7 @@ struct PhotoKitAlbumDetailView: View {
         let page = await store.photoKit.albumPage(
             album,
             offset: assets.count,
-            limit: PhotoKitService.cameraRollPageSize
+            limit: PhotoKitService.albumPageSize
         )
         if page.isEmpty {
             // Nothing left to fetch — the count the album tile carries is
@@ -503,5 +456,22 @@ struct PhotoKitAlbumDetailView: View {
             return
         }
         assets.append(contentsOf: page)
+    }
+
+    /// Reload after a Photos-library change, keeping the depth the user
+    /// had already paged to so a new screenshot does not throw them back
+    /// to the top of a long album.
+    private func reloadAfterLibraryChange() async {
+        if let fresh = store.photoKit.albums.first(where: { $0.id == album.id }) {
+            currentCount = fresh.count
+        }
+        let target = max(assets.count, PhotoKitService.initialAlbumLimit)
+        let page = await store.photoKit.albumPage(
+            album,
+            offset: 0,
+            limit: target
+        )
+        assets = page
+        hasReachedTheEnd = page.isEmpty && currentCount > 0
     }
 }
