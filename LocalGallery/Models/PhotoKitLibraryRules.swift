@@ -3,7 +3,7 @@ import Foundation
 /// The rules the photo-library screens follow, as pure functions.
 ///
 /// The rules themselves are simple — an album's place in the grid, when
-/// the timeline has more to load, how a section is titled — but they are
+/// an album has more to load, how a section is titled — but they are
 /// the parts a screenshot cannot pin. PhotoKit cannot be faked in a unit
 /// test, so the *shapes* it produces (albums, assets) are ordinary value
 /// types, and the rules that consume them are ordinary functions over
@@ -20,8 +20,7 @@ enum PhotoKitLibraryRules {
 
     /// The order albums appear in.
     ///
-    /// A rule rather than an accident: the system albums a user reaches
-    /// for come first (Camera Roll, Recents), then the ones that are
+    /// A rule rather than an accident: Camera first, then the other
     /// filters over the library (Screenshots, Videos, Favorites), then
     /// the user's own albums — which are the only ones whose order is
     /// meaningful to them, so they keep the order the system gave them.
@@ -30,17 +29,16 @@ enum PhotoKitLibraryRules {
     /// moved as a block.
     static func ordered(_ albums: [PhotoKitAlbum]) -> [PhotoKitAlbum] {
         let rank: [PhotoKitAlbum.Kind: Int] = [
-            .cameraRoll: 0,
-            .recents: 1,
-            .screenshots: 2,
-            .videos: 3,
-            .favorites: 4,
-            .user: 5,
+            .camera: 0,
+            .screenshots: 1,
+            .videos: 2,
+            .favorites: 3,
+            .user: 4,
         ]
         return albums.enumerated()
             .sorted { lhs, rhs in
-                let lhsRank = rank[lhs.element.kind] ?? 6
-                let rhsRank = rank[rhs.element.kind] ?? 6
+                let lhsRank = rank[lhs.element.kind] ?? 5
+                let rhsRank = rank[rhs.element.kind] ?? 5
                 if lhsRank != rhsRank { return lhsRank < rhsRank }
                 // Same rank — keep the original order. `enumerated()`'s
                 // offset is the tiebreaker, and it is unique, so the sort
@@ -50,13 +48,30 @@ enum PhotoKitLibraryRules {
             .map(\.element)
     }
 
+    // MARK: - Camera membership
+
+    /// Whether an asset belongs in the Camera album, decided from the
+    /// metadata PhotoKit exposes.
+    ///
+    /// Pure and value-based so the rule can be pinned in a test: the
+    /// service extracts the three inputs from each `PHAsset` and this
+    /// function decides. See `PhotoKitService` for why these are the
+    /// signals used, and for the limits of what iOS can tell us.
+    static func isCameraCapture(
+        isScreenshot: Bool,
+        isSyncedFromComputer: Bool,
+        isCloudShared: Bool
+    ) -> Bool {
+        !isScreenshot && !isSyncedFromComputer && !isCloudShared
+    }
+
     // MARK: - Paging
 
-    /// Whether the timeline has more assets to pull in.
+    /// Whether an album grid has more assets to pull in.
     ///
     /// The total comes from PhotoKit's own count, so this is exact
     /// without loading every asset — and the paging sentinel disappears
-    /// by itself once the whole library is on screen.
+    /// by itself once the whole album is on screen.
     static func hasMore(fetched: Int, total: Int) -> Bool {
         fetched < total
     }
@@ -80,12 +95,12 @@ enum PhotoKitLibraryRules {
 
     /// The viewer's "N of M" label.
     ///
-    /// `total` is the size of the *collection* being browsed — the whole
-    /// library for the timeline, one album for a drill-in — and it is
-    /// deliberately separate from the number of assets that have been
-    /// paged in. The timeline pages in 600 at a time, so using the paged
-    /// count would read "12 of 600" on a library that holds 12,043
-    /// photos: a number that looks plausible and is wrong.
+    /// `total` is the size of the *collection* being browsed — one album
+    /// for a drill-in — and it is deliberately separate from the number
+    /// of assets that have been paged in. An album grid pages in 600 at
+    /// a time, so using the paged count would read "12 of 600" in an
+    /// album that holds 12,043 photos: a number that looks plausible
+    /// and is wrong.
     ///
     /// A `total` below the current position would be nonsense (the user
     /// swiped past the end), so the browsed count is used as the floor —
