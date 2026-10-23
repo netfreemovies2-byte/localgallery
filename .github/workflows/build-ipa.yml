@@ -91,8 +91,9 @@ jobs:
             CODE_SIGN_IDENTITY="" \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO \
-            SWIFT_COMPILATION_MODE=incremental \
+            SWIFT_COMPILATION_MODE=singlefile \
             SWIFT_OPTIMIZATION_LEVEL=-Onone \
+            OTHER_SWIFT_FLAGS="-Xfrontend -debug-time-function-bodies" \
             build 2>&1 | tee "$ROOT/xcodebuild-build.log"
 
       - name: Locate and validate app bundle
