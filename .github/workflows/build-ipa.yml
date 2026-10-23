@@ -87,9 +87,12 @@ jobs:
             -sdk iphoneos \
             -destination "generic/platform=iOS" \
             -derivedDataPath "$DERIVED" \
+            -showBuildTimingSummary \
             CODE_SIGN_IDENTITY="" \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO \
+            SWIFT_COMPILATION_MODE=incremental \
+            SWIFT_OPTIMIZATION_LEVEL=-Onone \
             build 2>&1 | tee "$ROOT/xcodebuild-build.log"
 
       - name: Locate and validate app bundle
