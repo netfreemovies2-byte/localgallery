@@ -357,10 +357,12 @@ jobs:
           DERIVED="$ROOT/build/DerivedData"
           rm -rf "$DERIVED"
           mkdir -p "$ROOT/build"
-          if command -v gtimeout >/dev/null 2>&1; then TO=gtimeout; else TO=timeout; fi
-          echo "Using $TO 900 for xcodebuild"
+          # Pure-bash time box: this runner image has neither GNU timeout
+          # nor gtimeout (run 39912615120 failed in 0s with
+          # "timeout: command not found"), so xcodebuild runs in the
+          # background and a watchdog loop enforces the 900s cap.
           set +e
-          "$TO" 900 xcodebuild \
+          xcodebuild \
             -project "$ROOT/LocalGallery.xcodeproj" \
             -scheme LocalGallery \
             -configuration Release \
@@ -374,11 +376,29 @@ jobs:
             SWIFT_COMPILATION_MODE=singlefile \
             SWIFT_OPTIMIZATION_LEVEL=-Onone \
             OTHER_SWIFT_FLAGS="-Xfrontend -debug-time-function-bodies -Xfrontend -debug-time-compilation" \
-            build 2>&1 | tee "$ROOT/xcodebuild-build.log"
-          XC=${PIPESTATUS[0]}
+            build > "$ROOT/xcodebuild-build.log" 2>&1 &
+          XPID=$!
+          ELAPSED=0
+          XC=""
+          while kill -0 "$XPID" 2>/dev/null; do
+            if [ "$ELAPSED" -ge 900 ]; then
+              echo "Time box reached (900s) - terminating xcodebuild"
+              kill "$XPID" 2>/dev/null
+              sleep 5
+              pkill -9 -x swiftc 2>/dev/null
+              pkill -9 -f swift-frontend 2>/dev/null
+              kill -9 "$XPID" 2>/dev/null
+              XC=124
+              break
+            fi
+            sleep 15
+            ELAPSED=$((ELAPSED+15))
+          done
+          if [ -z "$XC" ]; then wait "$XPID"; XC=$?; fi
           set -e
           echo "xcodebuild exit code: $XC (124 = killed by the 15-minute time box)"
           echo "### Diagnostic compile exit code: $XC" >> "$GITHUB_STEP_SUMMARY"
+          tail -n 60 "$ROOT/xcodebuild-build.log" || true
 
       - name: Upload diagnostic build log
         if: always()
