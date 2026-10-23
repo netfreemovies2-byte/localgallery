@@ -1,11 +1,12 @@
 import SwiftUI
 
-/// The album grid for the device's own Photos library.
+/// The album grid for the device's own Photos library — the app's home
+/// screen.
 ///
-/// A sibling of `AlbumTileGrid` (the folder tree's tile grid) rather
-/// than a variant: the two show different things — PhotoKit albums have
-/// no folder tree, no subfolders and no "All Photos" pseudo-album, and a
-/// tile's cover is a `PHAsset` rather than a file URL.
+/// Its own view rather than a variant of a folder-tree tile grid: the
+/// two show different things — PhotoKit albums have no folder tree, no
+/// subfolders and no "All Photos" pseudo-album, and a tile's cover is a
+/// `PHAsset` rather than a file URL.
 struct PhotoKitAlbumGrid: View {
     @Environment(GalleryStore.self) private var store
 
@@ -35,20 +36,19 @@ struct PhotoKitAlbumGrid: View {
                     alignment: .leading,
                     spacing: 18
                 ) {
-                    Section {
-                        ForEach(store.photoKit.albums) { album in
-                            PhotoKitAlbumTile(
-                                album: album,
-                                width: tileWidth
-                            )
-                        }
-                    } header: {
-                        PhotoKitSectionHeader(title: "Albums")
+                    ForEach(store.photoKit.albums) { album in
+                        PhotoKitAlbumTile(
+                            album: album,
+                            width: tileWidth
+                        )
                     }
                 }
                 .padding(.horizontal, Self.horizontalPadding)
                 .padding(.top, 8)
                 .padding(.bottom, 24)
+            }
+            .refreshable {
+                await store.photoKit.loadLibrary()
             }
             .softTopScrollEdge()
         }
