@@ -511,22 +511,29 @@ final class PhotoKitService {
     func delete(assetIDs: [String]) async -> Bool {
         guard authorization.isReadable, !assetIDs.isEmpty else { return false }
         let ids = assetIDs
+        Log.photokit.info("Delete: requested (\(ids.count) item\(ids.count == 1 ? "" : "s"))")
+        // Apple's canonical form: fetch OUTSIDE the change block and
+        // let the block merely consume the result. (The fetch used
+        // to live inside the block to keep non-Sendable objects out
+        // of the closure; the result now crosses in a box instead.)
+        let fetchedBox = DeleteFetchBox(
+            result: PHAsset.fetchAssets(withLocalIdentifiers: ids, options: nil)
+        )
         let success: Bool = await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
-            // The change block captures only the identifiers — re-fetching
-            // inside it keeps the non-`Sendable` `PHAsset` objects out of
-            // the closure entirely.
             PHPhotoLibrary.shared().performChanges({
-                let fetched = PHAsset.fetchAssets(withLocalIdentifiers: ids, options: nil)
-                PHAssetChangeRequest.deleteAssets(fetched)
+                PHAssetChangeRequest.deleteAssets(fetchedBox.result)
             }) { ok, error in
                 if let error {
                     Log.photokit.error("Delete failed: \(Log.r.error(error))")
+                } else {
+                    Log.photokit.info("Delete: change applied")
                 }
                 continuation.resume(returning: ok)
             }
         }
         if success {
             await loadLibrary()
+            Log.photokit.info("Delete: library reloaded")
         }
         return success
     }
@@ -1131,6 +1138,11 @@ extension PhotoKitService {
 /// handoff with a `nonisolated(unsafe)` local; Swift 6 region
 /// analysis in the Release build rejects that for optional/tuple
 /// payloads, so the handoff is made explicit here instead.
+/// Carries a delete fetch result into its change block.
+private struct DeleteFetchBox: @unchecked Sendable {
+    let result: PHFetchResult<PHAsset>
+}
+
 private struct AVAssetRequestOutcome: @unchecked Sendable {
     let avAsset: AVAsset?
     let errorMessage: String?
