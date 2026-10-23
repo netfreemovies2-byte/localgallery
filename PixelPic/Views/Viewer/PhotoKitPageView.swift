@@ -22,6 +22,13 @@ import Photos
 ///   requested when the page becomes the settled, current page —
 ///   three full-size decodes racing during a swipe was both wasted
 ///   memory and contention that starved the current page.
+/// * A page seeds itself synchronously from the thumbnail cache —
+///   whatever size the grid decoded — before its first await, and
+///   concurrent full-image triggers coalesce into one request. A
+///   cache keyed by exact size plus un-coalesced duplicate loads
+///   reproduced the black viewer on device even with the discipline
+///   above in place: the tapped photo's decode existed in memory,
+///   at the grid's size, and the page could not see it.
 /// * Loading is a visible state, not an absence: spinner, iCloud
 ///   download progress when PhotoKit reports it, the degraded
 ///   preview the moment it arrives, and — on genuine failure — an
@@ -67,6 +74,13 @@ struct PhotoKitPageView: View {
     @State private var downloadProgress: Double?
     /// Bumped by the Retry button to re-run the full-image load.
     @State private var retryNonce = 0
+    /// The nonce of the full-image load currently in flight, if any.
+    /// Several triggers can ask for the full image at once (the
+    /// thumbnail task's tail, the current-page task, a retry); they
+    /// must coalesce into ONE request, not race near-identical
+    /// 2000 px decodes that supersede each other and leave the page
+    /// waiting on the slowest — a device-reproduced black viewer.
+    @State private var fullLoadNonce: Int?
     /// Why starting the video failed (load-level; playback-level
     /// failures arrive via `playbackState.playbackError`).
     @State private var videoLoadError: String?
@@ -271,7 +285,37 @@ struct PhotoKitPageView: View {
             photoLoadingBody
         }
 
+        // A preview is on screen but the full image is still
+        // loading: say so, visibly. Without this the seeded or
+        // degraded picture looks final-but-soft with no explanation,
+        // and the wait reads as a hang.
+        if fullImage == nil, thumbnail != nil, loadPhase == .loading {
+            loadingProgressCapsule
+        }
+
         livePhotoOverlay
+    }
+
+    /// The in-flight indicator shown over a seeded/degraded preview
+    /// while the full image loads: spinner, plus iCloud progress
+    /// when PhotoKit reports it.
+    private var loadingProgressCapsule: some View {
+        HStack(spacing: 8) {
+            ProgressView().tint(.white)
+            if let downloadProgress, downloadProgress < 1 {
+                Text("Downloading from iCloud… \(Int(downloadProgress * 100))%")
+            } else {
+                Text("Loading full photo…")
+            }
+        }
+        .font(.footnote)
+        .foregroundStyle(.white)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
+        .background(.black.opacity(0.55), in: Capsule())
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+        .padding(.bottom, 96)
+        .allowsHitTesting(false)
     }
 
     /// The explicit loading state: a spinner, and when PhotoKit is
@@ -286,6 +330,10 @@ struct PhotoKitPageView: View {
                     .foregroundStyle(.white.opacity(0.85))
             }
         }
+        // Full-frame and centered: a content-sized spinner tucked
+        // in a corner of a black page is indistinguishable from the
+        // black screen it is supposed to be explaining.
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     /// A genuine failure: say so, and let the user retry without
@@ -386,13 +434,35 @@ struct PhotoKitPageView: View {
             downloadProgress = nil
             videoLoadError = nil
             isZoomed = false
+            fullLoadNonce = nil
             stopVideo()
             stopLivePlayback()
+        }
+        // Seed BEFORE the first await: whatever the grid already
+        // decoded for this asset — the very image the user tapped —
+        // goes on screen in the same frame. The cache is keyed by
+        // size and the grid's cell size is not this page's 600 pt,
+        // so an exact-size lookup would miss by construction and
+        // the page would sit black through a cold ~1800 px decode;
+        // that miss was the device-reported black viewer.
+        if thumbnail == nil, let seed = store.photoKit.cachedThumbnail(for: asset.id) {
+            thumbnail = seed
         }
         loadNonce += 1
         let nonce = loadNonce
         let assetID = asset.id
-        let image = await store.photoKit.thumbnail(for: assetID, size: 600)
+        let image = await store.photoKit.thumbnail(
+            for: assetID,
+            size: 600,
+            onDegraded: { degraded in
+                // A degraded preview beats an empty page while the
+                // full decode is still running.
+                guard loadNonce == nonce, loadedAssetID == assetID else { return }
+                if thumbnail == nil {
+                    thumbnail = degraded
+                }
+            }
+        )
         guard loadNonce == nonce, loadedAssetID == assetID else { return }
         if let image, thumbnail == nil {
             thumbnail = image
@@ -415,11 +485,18 @@ struct PhotoKitPageView: View {
     private func loadFullImageIfNeeded(force: Bool = false) async {
         guard !asset.isVideo, isCurrentPage else { return }
         if fullImage != nil, !force { return }
+        // Coalesce concurrent triggers (thumbnail tail, current-page
+        // task, retry task): one in-flight load per page. Without
+        // this, two triggers each start a 2000 px decode and the
+        // nonce drops the first one's result — the page waits on
+        // duplicated work while showing nothing new.
+        if fullLoadNonce != nil, !force { return }
         if loadedAssetID != asset.id {
             await loadThumbnail()
         }
         loadNonce += 1
         let nonce = loadNonce
+        fullLoadNonce = nonce
         let assetID = asset.id
         loadPhase = .loading
         let image = await store.photoKit.fullImage(
@@ -435,6 +512,9 @@ struct PhotoKitPageView: View {
                 }
             }
         )
+        if fullLoadNonce == nonce {
+            fullLoadNonce = nil
+        }
         guard loadNonce == nonce, loadedAssetID == assetID else { return }
         downloadProgress = nil
         if let image {
