@@ -244,19 +244,7 @@ struct LocalGalleryApp: App {
                     }
                 }
                 .onOpenURL { url in
-                    router.handle(url, store: store)
-                }
-                // Cold-launch deep links (folder/memory) queue an id when the
-                // backing data isn't ready; consume them as soon as the data
-                // appears so the user lands on the right screen.
-                .onChange(of: store.rootFolder?.id) { _, _ in
-                    router.consumePendingIfReady(store: store)
-                }
-                // `memories` (not `.count`) so a same-size regeneration still
-                // re-evaluates — Memory equality is id-based, so this fires
-                // whenever the id set changes.
-                .onChange(of: store.memories.all) { _, _ in
-                    router.consumePendingIfReady(store: store)
+                    router.handle(url)
                 }
         }
     }
@@ -315,100 +303,27 @@ struct LocalGalleryApp: App {
         UINavigationBar.appearance().compactAppearance = navStandard
         UINavigationBar.appearance().compactScrollEdgeAppearance = navEdge
 
-        // Tab bar: warm translucent. SwiftUI TabView doesn't expose background
-        // color or separator without UIKit appearance; unrelated to @Observable.
-        let tab = UITabBarAppearance()
-        tab.configureWithOpaqueBackground()
-        tab.backgroundColor = Design.bgScheme.dynamic(alpha: 0.96)
-        tab.shadowColor = Design.separatorScheme.dynamic
-        // Item colours follow the ink ramp rather than the system label
-        // colours: the unselected label is a step down from the selected
-        // one, which keeps the four tabs readable on the warm canvas in
-        // both appearances. Left at the system defaults, the unselected
-        // label would sit at system grey and read as *disabled* next to
-        // the accent-tinted selected tab.
-        //
-        // Set on the *bar* rather than on the nested
-        // `UITabBarItemAppearance` states: the bar's own `tintColor` and
-        // `unselectedItemTintColor` cover every layout variant — stacked,
-        // inline and compact-inline — with one pair of properties, so the
-        // iPad's variants cannot drift apart from the phone's.
-        UITabBar.appearance().tintColor = accent
-        UITabBar.appearance().unselectedItemTintColor = Design.ink3Scheme.dynamic
-        UITabBar.appearance().standardAppearance = tab
-        UITabBar.appearance().scrollEdgeAppearance = tab
+        // No tab bar appearance: the app has no tabs. It is a single
+        // gallery — one navigation stack rooted at the Albums screen.
     }
 }
 
 struct ContentView: View {
-    @Environment(GalleryStore.self) private var store
     @Environment(AppRouter.self) private var router
 
     var body: some View {
         @Bindable var router = router
-        TabView(selection: $router.selectedTab) {
-            NavigationStack(path: $router.foldersPath) {
-                FolderBrowserView()
-                    .navigationDestination(for: FolderRoute.self) { route in
-                        switch route {
-                        case .browser(let folder):
-                            FolderBrowserView(folder: folder, isRoot: false)
-                        case .grid(let folder):
-                            FolderGridView(title: folder.name, folderID: folder.id)
-                        }
-                    }
-            }
-            .tabItem {
-                Label("Folders", systemImage: "folder")
-            }
-            .tag(AppRouter.Tab.folders)
-
-            NavigationStack(path: $router.collectionsPath) {
-                CollectionsView(path: $router.collectionsPath)
-            }
-            .tabItem {
-                Label("Collections", systemImage: "rectangle.stack")
-            }
-            .tag(AppRouter.Tab.collections)
-
-            NavigationStack {
-                AllPhotosView()
-            }
-            .tabItem {
-                Label("Photos", systemImage: "square.stack.3d.up")
-            }
-            .tag(AppRouter.Tab.photos)
-
-            // The path is bound so the album grid's drill-in pushes onto
-            // this stack. `PhotoKitLibraryView` registers the
-            // `PhotoLibraryRoute` destination on it.
-            NavigationStack(path: $router.photoLibraryPath) {
-                PhotoKitLibraryView()
-            }
-            .tabItem {
-                Label("Camera Roll", systemImage: "camera.aperture")
-            }
-            .tag(AppRouter.Tab.cameraRoll)
-        }
-        .minimizableTabBar()
-        .onChange(of: store.libraryAvailability) { _, availability in
-            // Pushed folder/person/memory screens still hold live queries
-            // against `allPhotos`. An unlistable root keeps that array, so
-            // leaving them on the stack would show the library we just hid.
-            if availability.hidesLibrary {
-                router.foldersPath = []
-                router.collectionsPath = []
-            }
-        }
-        .task {
-            // Folder restore and cluster load are independent: clusters live
-            // in `gallery-cache.sqlite`, not the photo tree. Running them
-            // together means Review New People can appear before the scan
-            // finishes, and neither is tied to Collections remaining on
-            // screen (its `.task` cancels on tab switch).
-            async let restored: Void = store.restoreFolder()
-            async let clusters: Void = store.faces.refreshClusters()
-            _ = await (restored, clusters)
+        // The one main screen: the Albums gallery over the device's
+        // Photos library. The path is bound so the album grid's drill-in
+        // pushes onto this stack; `PhotoKitLibraryView` registers the
+        // `PhotoLibraryRoute` destination on it.
+        //
+        // There is deliberately nothing else here — no TabView, no
+        // folder restore, no "choose a folder" gate. The app opens
+        // straight into the gallery, and the gallery's own view owns
+        // the Photos-permission states.
+        NavigationStack(path: $router.photoLibraryPath) {
+            PhotoKitLibraryView()
         }
     }
 }
