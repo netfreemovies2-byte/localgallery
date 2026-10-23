@@ -348,11 +348,10 @@ final class PhotoKitService {
         options.isNetworkAccessAllowed = true
         options.deliveryMode = .automatic
 
-        let outcome: (avAsset: AVAsset?, errorMessage: String?) = await withCheckedContinuation { continuation in
+        let outcome: AVAssetRequestOutcome = await withCheckedContinuation { continuation in
             PHImageManager.default().requestAVAsset(forVideo: asset, options: options) { avAsset, _, info in
                 let error = info?[PHImageErrorKey] as? Error
-                nonisolated(unsafe) let deliveredAsset = avAsset
-                continuation.resume(returning: (deliveredAsset, error?.localizedDescription))
+                continuation.resume(returning: AVAssetRequestOutcome(avAsset: avAsset, errorMessage: error?.localizedDescription))
             }
         }
         guard let avAsset = outcome.avAsset else {
@@ -1057,17 +1056,17 @@ extension PhotoKitService {
     /// make/model, the video has no positive camera evidence and —
     /// by the same rule as photos — is not confirmed for Camera.
     private nonisolated static func probeVideoEvidence(for asset: PHAsset) async -> CameraMetadataEvidence? {
-        let avAsset: AVAsset? = await withCheckedContinuation { continuation in
+        let outcome: AVAssetRequestOutcome = await withCheckedContinuation { continuation in
             let resumeGuard = ProbeResumeGuard()
             let options = PHContentEditingInputRequestOptions()
             options.isNetworkAccessAllowed = false
             asset.requestContentEditingInput(with: options) { input, _ in
                 if resumeGuard.claim() {
-                    continuation.resume(returning: input?.avAsset)
+                    continuation.resume(returning: AVAssetRequestOutcome(avAsset: input?.avAsset, errorMessage: nil))
                 }
             }
         }
-        guard let avAsset else { return nil }
+        guard let avAsset = outcome.avAsset else { return nil }
         var evidence = CameraMetadataEvidence()
         for format in [AVMetadataFormat.quickTimeMetadata] {
             guard let items = try? await avAsset.loadMetadata(for: format) else { continue }
@@ -1083,6 +1082,20 @@ extension PhotoKitService {
         }
         return evidence
     }
+}
+
+/// The result of a PhotoKit AVAsset request, carried across a
+/// checked continuation.
+///
+/// `@unchecked Sendable`: `AVAsset` is not `Sendable`, but the
+/// request callback hands over the delivered instance and nothing
+/// mutates it afterwards. The pre-rebrand code made the same
+/// handoff with a `nonisolated(unsafe)` local; Swift 6 region
+/// analysis in the Release build rejects that for optional/tuple
+/// payloads, so the handoff is made explicit here instead.
+private struct AVAssetRequestOutcome: @unchecked Sendable {
+    let avAsset: AVAsset?
+    let errorMessage: String?
 }
 
 /// Resume-once guard for PhotoKit's request callbacks, which are
