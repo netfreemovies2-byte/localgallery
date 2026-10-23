@@ -394,6 +394,7 @@ struct PhotoKitPageView: View {
                   videoNonce == nonce,
                   currentAssetID == assetID else { return }
             guard let item = result.item else {
+                Log.photokit.error("Video: load failed")
                 videoLoadError = result.failureMessage
                     ?? "This video could not be loaded."
                 return
@@ -406,7 +407,9 @@ struct PhotoKitPageView: View {
             // already knows the duration, and so the item's status
             // (including failure) is observed from the start.
             playbackState.attach(to: newPlayer)
+            Log.photokit.info("Video: player attached")
             playbackState.play()
+            Log.photokit.info("Video: playback started")
             isChromeVisible = false
         }
     }
