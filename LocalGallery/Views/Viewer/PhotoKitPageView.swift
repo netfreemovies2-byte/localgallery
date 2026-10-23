@@ -27,6 +27,48 @@ struct PhotoKitPageView: View {
     /// bar so it survives the bar being hidden and shown again.
     @State private var playbackState = VideoPlaybackState()
 
+    private var videoBody: some View {
+        if isPlayingVideo, let player {
+            // The raw player layer, not AVKit's `VideoPlayer`: `VideoPlayer`
+            // brings its own transport controls, which would sit on top of
+            // the app's transport bar and give the user two scrubbers
+            // fighting over the same gesture.
+            AVPlayerLayerView(player: player)
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        videoTransportVisible.toggle()
+                    }
+                }
+                .overlay(alignment: .bottom) {
+                    if videoTransportVisible {
+                        VideoTransportBar(state: playbackState)
+                            .padding(.horizontal, 16)
+                            .padding(.bottom, 24)
+                            .transition(.opacity)
+                    }
+                }
+        } else {
+            ZStack {
+                if let thumbnail {
+                    Image(uiImage: thumbnail)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                } else {
+                    ProgressView().tint(.white)
+                }
+                Button {
+                    startVideo()
+                } label: {
+                    Image(systemName: "play.circle.fill")
+                        .font(.system(size: 64))
+                        .foregroundStyle(.white.opacity(0.9))
+                        .shadow(radius: 8)
+                }
+            }
+        }
+    }
+
     var body: some View {
         GeometryReader { geo in
             ZStack {
@@ -71,50 +113,6 @@ struct PhotoKitPageView: View {
         }
     }
 
-    // MARK: - Video
-
-    private var videoBody: some View {
-        if isPlayingVideo, let player {
-            // The raw player layer, not AVKit's `VideoPlayer`: `VideoPlayer`
-            // brings its own transport controls, which would sit on top of
-            // the app's transport bar and give the user two scrubbers
-            // fighting over the same gesture.
-            AVPlayerLayerView(player: player)
-                .contentShape(Rectangle())
-                .onTapGesture {
-                    withAnimation(.easeInOut(duration: 0.2)) {
-                        videoTransportVisible.toggle()
-                    }
-                }
-                .overlay(alignment: .bottom) {
-                    if videoTransportVisible {
-                        VideoTransportBar(state: playbackState)
-                            .padding(.horizontal, 16)
-                            .padding(.bottom, 24)
-                            .transition(.opacity)
-                    }
-                }
-        } else {
-            ZStack {
-                if let thumbnail {
-                    Image(uiImage: thumbnail)
-                        .resizable()
-                        .aspectRatio(contentMode: .fit)
-                } else {
-                    ProgressView().tint(.white)
-                }
-                Button {
-                    startVideo()
-                } label: {
-                    Image(systemName: "play.circle.fill")
-                        .font(.system(size: 64))
-                        .foregroundStyle(.white.opacity(0.9))
-                        .shadow(radius: 8)
-                }
-            }
-        }
-    }
-
     @ViewBuilder
     private var photoBody: some View {
         if let displayImage = fullImage ?? thumbnail {
@@ -140,50 +138,6 @@ struct PhotoKitPageView: View {
         if isPlayingLive, let livePlayer {
             AVPlayerLayerView(player: livePlayer)
                 .allowsHitTesting(false)
-        }
-    }
-
-    var body: some View {
-        GeometryReader { geo in
-            ZStack {
-                if asset.isVideo {
-                    videoBody
-                } else {
-                    nonVideoBody
-                }
-            }
-            .frame(width: geo.size.width, height: geo.size.height)
-            // Live-photo press-and-hold. The `pressing` callback fires
-            // *immediately* on touch start (before `minimumDuration`), so
-            // anything heavyweight (start playback, hide chrome) MUST live
-            // in `perform` — the recognised long-press — or every quick tap
-            // on a live photo races the chrome toggle: pressing(true) hides
-            // chrome, then ZoomableImageView's delayed singleTap toggles it
-            // back. `pressing(false)` only stops playback, never starts it.
-            .onLongPressGesture(
-                minimumDuration: 0.3,
-                maximumDistance: 50,
-                perform: {
-                    guard asset.isLivePhoto, !isZoomed else { return }
-                    Task { await startLivePlayback() }
-                },
-                onPressingChanged: { pressing in
-                    if !pressing { stopLivePlayback() }
-                }
-            )
-        }
-        .task(id: asset.id) {
-            await load()
-        }
-        .onDisappear {
-            // The page controller retains neighbour pages, so without this
-            // a playing video keeps its audio going after the user swipes
-            // to the next asset.
-            player?.pause()
-            isPlayingVideo = false
-            playbackState.detach()
-            videoTransportVisible = false
-            stopLivePlayback()
         }
     }
 
@@ -199,36 +153,6 @@ struct PhotoKitPageView: View {
             playbackState.attach(to: newPlayer)
             playbackState.play()
             isChromeVisible = false
-        }
-    }
-
-    // MARK: - Photo
-
-    @ViewBuilder
-    private var photoBody: some View {
-        if let displayImage = fullImage ?? thumbnail {
-            ZoomableImageView(
-                image: displayImage,
-                isZoomEnabled: true,
-                onSingleTap: {
-                    withAnimation { isChromeVisible.toggle() }
-                },
-                onZoomChange: { zoomed in
-                    isZoomed = zoomed
-                    if zoomed { stopLivePlayback() }
-                }
-            )
-        } else {
-            ProgressView().tint(.white)
-        }
-
-        // Live photo motion overlay. The still underneath is dimmed while
-        // the motion plays — the system Photos app does the same, and
-        // without it the two images fight for the eye and the motion
-        // looks like a glitch rather than a live photo.
-        if isPlayingLive, let livePlayer {
-            AVPlayerLayerView(player: livePlayer)
-                .allowsHitTesting(false)
         }
     }
 
