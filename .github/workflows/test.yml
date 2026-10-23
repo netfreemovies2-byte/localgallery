@@ -402,8 +402,8 @@ jobs:
       - name: Run tests
         run: |
           xcodebuild test \
-            -project LocalGallery.xcodeproj \
-            -scheme LocalGallery \
+            -project PixelPic.xcodeproj \
+            -scheme PixelPic \
             -destination "platform=iOS Simulator,name=${{ steps.pick.outputs.device_name }}" \
             -testLanguage en \
             -testRegion US \
@@ -423,3 +423,36 @@ jobs:
             TestResults.xcresult
           if-no-files-found: warn
           retention-days: 14
+
+  secret-scan:
+    name: Secret scan (grep-based)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+
+      # A lightweight, high-signal pattern scan — NOT a substitute
+      # for a dedicated scanner. It exists so that an accidentally
+      # committed credential fails loudly in free CI: gitleaks'
+      # action is free for personal repos but its availability and
+      # terms have shifted before, so this job depends on nothing
+      # beyond grep. Patterns cover private keys, major token
+      # shapes and credential assignments; test fixtures and this
+      # workflow (which necessarily contains the patterns) are
+      # excluded.
+      - name: Scan tracked files for credential-shaped strings
+        run: |
+          set -euo pipefail
+          PATTERNS='-----BEGIN (RSA |EC |OPENSSH |DSA |PGP )?PRIVATE KEY-----|AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{36,}|gho_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{20,}|xox[baprs]-[A-Za-z0-9-]{10,}|sk-(live|test)_[A-Za-z0-9]{16,}|AIza[0-9A-Za-z_-]{35}|(api[_-]?key|client[_-]?secret|access[_-]?token|password)\s*[:=]\s*["'\'''][^"'\''']{8,}["'\'']'
+          HITS="$(git ls-files \
+            | grep -v '^core/fixtures/' \
+            | grep -v '^linux/Cargo.lock$' \
+            | grep -v '^\.github/workflows/test.yml$' \
+            | xargs -r grep -nIE "$PATTERNS" 2>/dev/null || true)"
+          if [[ -n "$HITS" ]]; then
+            echo "::error::Credential-shaped strings found — review, rotate if real, and remove:"
+            echo "$HITS"
+            exit 1
+          fi
+          echo "Secret scan clean (grep-based high-signal patterns)."
