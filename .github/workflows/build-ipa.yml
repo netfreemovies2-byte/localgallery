@@ -375,7 +375,7 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             SWIFT_COMPILATION_MODE=singlefile \
             SWIFT_OPTIMIZATION_LEVEL=-Onone \
-            OTHER_SWIFT_FLAGS="-debug-time-compilation -stats-output-dir $ROOT/build/swift-stats -Xfrontend -debug-time-function-bodies" \
+            OTHER_SWIFT_FLAGS="-stats-output-dir $ROOT/build/swift-stats -Xfrontend -debug-time-function-bodies" \
             build > "$ROOT/xcodebuild-build.log" 2>&1 &
           XPID=$!
           ELAPSED=0
