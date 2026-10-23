@@ -9,7 +9,7 @@ There is no App Store pipeline in this repository.
 1. Mark a known tree (`v0.1.0`).
 2. Let CI generate the Xcode project (after core + pack path exist),
    compile, archive if configured, and run tests.
-3. Stop. Do not attach `LocalGallery.ipa` to a GitHub Release.
+3. Stop. Do not attach `PixelPic.ipa` to a GitHub Release.
 
 `.github/workflows/build.yml` is unsigned archive validation: it
 archives the app, checks the `.app` layout, and **fails if an IPA is
@@ -31,7 +31,7 @@ cd ../..
 PACK_VARIANT=tagging ./scripts/prepare_pack.sh
 xcodegen
 # Any available iPhone simulator (iOS 18+). Helper: scripts/pick_ios_simulator.sh
-xcodebuild test -project LocalGallery.xcodeproj -scheme LocalGallery \
+xcodebuild test -project PixelPic.xcodeproj -scheme PixelPic \
   -destination "platform=iOS Simulator,name=$(./scripts/pick_ios_simulator.sh)" \
   -testLanguage en -testRegion US
 cd core && cargo test --workspace

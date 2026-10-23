@@ -8,7 +8,7 @@ Current layout and what is allowed to cross each edge. Decisions:
 ## Pieces
 
 ```
-LocalGallery/          iOS shell: bookmarks, File Provider, UI, widgets
+PixelPic/          iOS shell: bookmarks, File Provider, UI, widgets
 linux/                 GTK4 / libadwaita shell (outside the Cargo workspace)
 core/                  Cargo workspace — engines and XMP
   gallery-model        photo / folder / snapshot types, stable ids

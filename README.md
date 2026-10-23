@@ -1,19 +1,33 @@
-# LocalGallery
+# Pixel Pic
 
-A folder-backed photo and video gallery for iOS and Linux. You pick a
-directory of files; the apps browse it in place. Nothing is imported
-into a private library.
+Pixel Pic is a photo gallery for iPhone. It opens straight into an
+**Albums** view of the photos already on the device — Camera,
+Screenshots, Videos, Favorites and your own albums — with a dark
+appearance and an orange accent. Nothing is uploaded and nothing
+leaves the device: Pixel Pic reads the system Photos library in
+place, refreshes automatically when the library changes, and its
+photo viewer can share photos and edit them (crop, rotate, basic
+adjustments) saving each edit as a new photo, never overwriting the
+original.
 
-Pair it with [Syncthing](https://syncthing.net/) (via
+> **Attribution:** Pixel Pic was originally developed under the name
+> **LocalGallery**, a folder-backed gallery. The folder library, the
+> Rust core and the Linux app below are that heritage, retained in
+> this repository; the iOS app's shipping experience is the Albums
+> gallery described above.
+
+Pair the folder library with [Syncthing](https://syncthing.net/) (via
 [SyncTrain](https://apps.apple.com/app/synctrain/id6475591584) on iOS)
-to sync the folder across devices.
+to sync a folder across devices.
 
 ## Why
 
-Photo libraries should not require a specific app or service. The
-folder is the gallery: you own the files and choose where they live.
+Photo libraries should not require a specific app or service. On
+iOS, the system Photos library is already yours — Pixel Pic is a
+faster, simpler window onto it. For the folder library: the folder
+is the gallery, you own the files and choose where they live.
 
-## Features
+## Core / folder library features (retained)
 
 - **Folder browsing** — cover thumbnails, sorting, nested folders
 - **Collections** — tags (people, places, objects, scenes) from XMP
@@ -44,7 +58,7 @@ are described in [docs/storage.md](docs/storage.md). Image bytes are
 not rewritten by the core.
 
 Places is the only product network egress: Nominatim (injectable
-endpoint). There is no LocalGallery account or telemetry backend.
+endpoint). There is no Pixel Pic account or telemetry backend.
 
 ## Requirements
 
@@ -63,12 +77,12 @@ brew install xcodegen          # CI pins 2.46.0; see scripts/install_xcodegen.sh
 mkdir -p build/pack
 ./scripts/prepare_pack.sh      # when build/model_packs/<version> exists
 xcodegen
-open LocalGallery.xcodeproj
+open PixelPic.xcodeproj
 ```
 
 `xcodegen` lists `build/core/Generated/GalleryCore.swift`; it does not
 run UniFFI. If that file is stale, Xcode reports missing `HeicDecoder`
-and similar. `./scripts/build_core.sh` regenerates it. The LocalGallery
+and similar. `./scripts/build_core.sh` regenerates it. The PixelPic
 target's **Build Rust Core** phase runs the same script; pass
 `--release` only when you invoke it from the CLI.
 
@@ -108,7 +122,7 @@ HEIC does not use libheif/libde265 (LGPL-3.0). The decode seam is
 
 ```bash
 # Any available iPhone simulator (iOS 18+). Helper: scripts/pick_ios_simulator.sh
-xcodebuild test -project LocalGallery.xcodeproj -scheme LocalGallery \
+xcodebuild test -project PixelPic.xcodeproj -scheme PixelPic \
   -destination "platform=iOS Simulator,name=$(./scripts/pick_ios_simulator.sh)" \
   -testLanguage en -testRegion US
 
@@ -117,8 +131,8 @@ cd core && cargo test --workspace
 
 Locale flags are required: memories fixtures assert `en_US`.
 
-Tests live in `LocalGalleryTests/Unit` with fixtures in
-`LocalGalleryTests/Support` and `core/fixtures/`. Architecture:
+Tests live in `PixelPicTests/Unit` with fixtures in
+`PixelPicTests/Support` and `core/fixtures/`. Architecture:
 [docs/architecture.md](docs/architecture.md).
 
 ## CI
@@ -136,9 +150,11 @@ a mapping at that commit reproduces the pinned hash. Do not invent one.
 
 ## Setup
 
-On first launch, pick (or create) a folder of photos. Syncthing and
-iCloud Drive folders are fine. Scan Photos is opt-in and writes
-sidecars. Places uploads GPS to Nominatim.
+On first launch the iOS app asks for Photos access and opens the
+Albums gallery — full, limited and denied access each have a proper
+state, and changing access in iOS Settings is picked up live. The
+folder library (core/Linux) instead starts by picking (or creating)
+a folder of photos; Syncthing and iCloud Drive folders are fine.
 
 ## Linux
 

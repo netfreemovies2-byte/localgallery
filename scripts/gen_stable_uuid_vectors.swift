@@ -1,15 +1,15 @@
 #!/usr/bin/env swift
 //
-// Regenerates LocalGalleryTests/Support/Fixtures/stable_uuid_vectors.json —
+// Regenerates PixelPicTests/Support/Fixtures/stable_uuid_vectors.json —
 // the conformance vectors shared by the Swift and Rust `StableUUID`
 // implementations.
 //
 //     swift scripts/gen_stable_uuid_vectors.swift
 //
 // The expected UUIDs are produced by the Swift algorithm (below), which is a
-// copy of `StableUUID.derive(from:)` in LocalGallery/Models/PhotoFile.swift —
+// copy of `StableUUID.derive(from:)` in PixelPic/Models/PhotoFile.swift —
 // the app is the source of truth. The copy exists only because a standalone
-// script can't `@testable import LocalGallery`; `StableUUIDVectorTests` asserts
+// script can't `@testable import PixelPic`; `StableUUIDVectorTests` asserts
 // the real implementation against every generated vector, so a drift between
 // this copy and the app fails the test suite rather than passing silently.
 //
@@ -157,7 +157,7 @@ let root = URL(fileURLWithPath: CommandLine.arguments.count > 1
                ? CommandLine.arguments[1]
                : FileManager.default.currentDirectoryPath)
 let out = root
-    .appendingPathComponent("LocalGalleryTests/Support/Fixtures/stable_uuid_vectors.json")
+    .appendingPathComponent("PixelPicTests/Support/Fixtures/stable_uuid_vectors.json")
 try FileManager.default.createDirectory(at: out.deletingLastPathComponent(),
                                         withIntermediateDirectories: true)
 try json.write(to: out, atomically: true, encoding: .utf8)

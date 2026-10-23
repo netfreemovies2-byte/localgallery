@@ -9,7 +9,7 @@
 # Usage:
 #   ./scripts/build_core.sh [--release] [--sdk iphoneos|iphonesimulator|all]
 #
-# Xcode's LocalGallery target runs this as a pre-build script. Inside Xcode
+# Xcode's PixelPic target runs this as a pre-build script. Inside Xcode
 # it reads CONFIGURATION (Release → --release) and PLATFORM_NAME (so a
 # simulator build does not also compile the device slice). User Script
 # Sandboxing is off on the project: cargo needs ~/.cargo, rustup, core/target,
@@ -339,7 +339,7 @@ copy_if_changed() {
 }
 
 # Drop `#if canImport(GalleryCoreFFI) / import GalleryCoreFFI`. Those C
-# types come from LocalGallery/GalleryCore-Bridging-Header.h instead.
+# types come from PixelPic/GalleryCore-Bridging-Header.h instead.
 strip_gallerycore_ffi_import() {
     python3 -c '
 import pathlib, re, sys
@@ -362,7 +362,7 @@ strip_gallerycore_ffi_import "$GENERATED_DIR/$MODULE.swift"
 copy_if_changed "$STAGING/${MODULE}FFI.h" "$HEADERS_DIR/${MODULE}FFI.h"
 # Do not install a clang module named GalleryCoreFFI. Xcode caches it.
 rm -f "$HEADERS_DIR/module.modulemap"
-APP_BINDINGS="$ROOT/LocalGallery/$MODULE.swift"
+APP_BINDINGS="$ROOT/PixelPic/$MODULE.swift"
 if [[ -e "$APP_BINDINGS" ]]; then
     copy_if_changed "$GENERATED_DIR/$MODULE.swift" "$APP_BINDINGS"
 fi

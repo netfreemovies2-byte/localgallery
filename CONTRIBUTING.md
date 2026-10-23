@@ -1,6 +1,6 @@
 # Contributing
 
-LocalGallery is a folder-backed photo app: iOS (SwiftUI + UniFFI) and
+Pixel Pic is a folder-backed photo app: iOS (SwiftUI + UniFFI) and
 Linux (GTK4 / libadwaita) share the Rust core under `core/`.
 
 ## Current-state docs
@@ -25,7 +25,7 @@ iOS (Apple Silicon Mac, Xcode that provides an iPhone simulator):
 ./scripts/prepare_pack.sh          # optional; needs a built pack
 xcodegen
 # Any available iPhone simulator (iOS 18+). Helper: scripts/pick_ios_simulator.sh
-xcodebuild test -project LocalGallery.xcodeproj -scheme LocalGallery \
+xcodebuild test -project PixelPic.xcodeproj -scheme PixelPic \
   -destination "platform=iOS Simulator,name=$(./scripts/pick_ios_simulator.sh)" \
   -testLanguage en -testRegion US
 ```
