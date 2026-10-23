@@ -350,3 +350,73 @@ final class ProbeResumeGuardTests: XCTestCase {
         XCTAssertEqual(winners, 1, "exactly one of many racing deliveries may resume")
     }
 }
+
+// MARK: - Selection gesture timing
+
+/// The long-press duration is user-specified at one second; pin it
+/// so a future "responsiveness" tweak can't silently change the
+/// selection feel again (the stacked-gesture composition it
+/// replaced registered in ~2s on device despite a 0.4 value).
+final class PhotoKitSelectionGestureTests: XCTestCase {
+
+    func testLongPressDurationIsOneSecond() {
+        XCTAssertEqual(PhotoKitSelectionGesture.longPressDuration, 1.0, accuracy: 0.0001)
+    }
+}
+
+// MARK: - Selection model semantics
+
+/// Behavioural pins for the value-type selection model the grid
+/// and the delete flow rely on.
+final class PhotoSelectionModelBehaviourTests: XCTestCase {
+
+    func testBeginSelectsExactlyThePressedAsset() {
+        var model = PhotoSelectionModel()
+        model.begin(with: "a")
+        XCTAssertTrue(model.isActive)
+        XCTAssertEqual(model.selectedIDs, ["a"])
+        XCTAssertEqual(model.count, 1)
+    }
+
+    func testToggleAddsAndRemovesButNeverLeavesMode() {
+        var model = PhotoSelectionModel()
+        model.begin(with: "a")
+        model.toggle("b")
+        XCTAssertEqual(model.selectedIDs, ["a", "b"])
+        model.toggle("a")
+        model.toggle("b")
+        XCTAssertTrue(model.isActive, "emptying the selection must not exit selection mode")
+        XCTAssertTrue(model.isEmpty)
+    }
+
+    func testToggleAndSelectAllAreInertWhileInactive() {
+        var model = PhotoSelectionModel()
+        model.toggle("a")
+        model.selectAll(["a", "b"])
+        XCTAssertFalse(model.isActive)
+        XCTAssertTrue(model.isEmpty)
+    }
+
+    func testSelectAllUnionsWithExistingSelection() {
+        var model = PhotoSelectionModel()
+        model.begin(with: "a")
+        model.selectAll(["b", "c"])
+        XCTAssertEqual(model.selectedIDs, ["a", "b", "c"])
+    }
+
+    func testPruneDropsOnlyDepartedIDs() {
+        var model = PhotoSelectionModel()
+        model.begin(with: "a")
+        model.selectAll(["b", "gone"])
+        model.prune(toPresentIDs: ["a", "b"])
+        XCTAssertEqual(model.selectedIDs, ["a", "b"])
+    }
+
+    func testCancelClearsEverything() {
+        var model = PhotoSelectionModel()
+        model.begin(with: "a")
+        model.cancel()
+        XCTAssertFalse(model.isActive)
+        XCTAssertTrue(model.isEmpty)
+    }
+}
