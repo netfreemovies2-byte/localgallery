@@ -2,13 +2,14 @@ import Foundation
 import Photos
 import UIKit
 
-/// The synthetic identifier of the "Camera Roll" album.
+/// The synthetic identifier of the "Camera" album.
 ///
-/// The Camera Roll is not a `PHAssetCollection` — it is "all assets" —
-/// so it has no identifier to fetch by. The pseudo-album needs one to
-/// be `Identifiable` and to be routed to, so it gets a constant.
+/// The Camera album is not a `PHAssetCollection` — it is a filtered
+/// fetch over the whole library — so it has no identifier to fetch by.
+/// The pseudo-album needs one to be `Identifiable` and to be routed to,
+/// so it gets a constant.
 enum PhotoKitAlbumID {
-    static let cameraRoll = "photokit:camera-roll"
+    static let camera = "photokit:camera"
 }
 
 /// In-memory thumbnail cache for photo-library assets.
