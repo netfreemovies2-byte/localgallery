@@ -1,116 +1,75 @@
 import SwiftUI
 
-/// Cross-tab navigation state. Owns the tab selection plus per-tab path
-/// bindings so widget deep links can land on the right screen.
+/// Navigation state for the app's one main screen.
 ///
-/// Cold-launch resilience: when a deep link fires before the relevant data is
-/// populated (folder tree from `restoreFolder()`, memories from generation),
-/// the target id is queued in `pendingFolderId` / `pendingMemoryId` and the
-/// view consumes it once the data appears. Same pattern as the existing
-/// `pendingPhotosTagFilter` for the Photos tab.
+/// The app has a single top-level experience — the Albums gallery over
+/// the device's Photos library — so the router owns exactly one path:
+/// the gallery's navigation stack, which carries album drill-ins.
+/// There is no tab state: the Folders, Collections and Photos tabs the
+/// app used to have were removed, and with them every route into those
+/// screens.
+///
+/// Widget deep links used to land on those removed screens (a memory,
+/// a folder, a tag filter). Those destinations no longer exist, so a
+/// deep link now simply opens the gallery at its root. The widget
+/// snapshot itself is untouched — a tap still brings the user into the
+/// app, just to the one screen the app has.
 @Observable
 @MainActor
 final class AppRouter {
-    enum Tab: Hashable {
-        case folders, collections, photos, cameraRoll
-    }
-
-    var selectedTab: Tab = .folders
-    var foldersPath: [FolderRoute] = []
-    var collectionsPath: [CollectionsRoute] = []
-    /// The Photos tab's own navigation stack — the device's Photos library
-    /// has drill-ins (an album → its assets) that the folder tree's stack
-    /// does not model.
+    /// The gallery's navigation stack — an album grid's drill-in (an
+    /// album → its assets) pushes onto it.
     var photoLibraryPath: [PhotoLibraryRoute] = []
-    /// Tag full-paths to apply when AllPhotosView next appears. Cleared after
-    /// the view consumes it so subsequent visits don't re-apply the filter.
-    var pendingPhotosTagFilter: [String] = []
-    /// Folder id to navigate to when the folder tree finishes loading.
-    var pendingFolderId: String?
-    /// Memory id to push as a slideshow when memories finish generating.
-    var pendingMemoryId: String?
 
-    func handle(_ url: URL, store: GalleryStore) {
-        guard let link = WidgetDeepLink.parse(url) else { return }
-        switch link {
-        case .memory(let id):
-            selectedTab = .collections
-            applyMemory(id: id, store: store)
-        case .folder(let id):
-            selectedTab = .folders
-            applyFolder(id: id, store: store)
-        case .tags(let paths):
-            selectedTab = .photos
-            pendingPhotosTagFilter = paths
-        }
-    }
-
-    /// Re-evaluate any queued deep link now that data may have loaded. Called
-    /// by the views observing `store.rootFolder` / `store.memories`.
-    func consumePendingIfReady(store: GalleryStore) {
-        if let id = pendingFolderId {
-            applyFolder(id: id, store: store)
-        }
-        if let id = pendingMemoryId {
-            applyMemory(id: id, store: store)
-        }
-    }
-
-    private func applyFolder(id: String, store: GalleryStore) {
-        guard let root = store.rootFolder else {
-            pendingFolderId = id
-            return
-        }
-        guard let folder = Self.findFolder(in: root, id: id) else {
-            // Tree loaded but the folder is gone — drop the pending state so
-            // we don't keep re-evaluating it.
-            pendingFolderId = nil
-            foldersPath = []
-            return
-        }
-        pendingFolderId = nil
-        if folder.subfolders.isEmpty && !folder.photos.isEmpty {
-            foldersPath = [.grid(folder)]
-        } else {
-            foldersPath = [.browser(folder)]
-        }
-    }
-
-    private func applyMemory(id: String, store: GalleryStore) {
-        if let memory = store.memories.all.first(where: { $0.id == id }) {
-            pendingMemoryId = nil
-            collectionsPath = [.slideshow(memory)]
-            return
-        }
-        // The id isn't resolvable yet. On a cold launch `memories` holds
-        // *yesterday's* cached entries, so non-empty is no proof the memory
-        // is gone — a widget tap on a pre-published scheduled memory (whose
-        // id only exists once today's generation runs) must stay queued
-        // until the daily regeneration has actually happened today.
-        if store.memories.hasGeneratedToday {
-            pendingMemoryId = nil
-            collectionsPath = []
-        } else {
-            pendingMemoryId = id
-        }
-    }
-
-    private static func findFolder(in folder: PhotoFolder, id: String) -> PhotoFolder? {
-        guard let uuid = UUID(uuidString: id) else { return nil }
-        return folder.folder(withID: uuid)
+    /// Handle a widget deep link by opening the gallery at its root.
+    ///
+    /// Any *recognized* link lands there, whatever it originally pointed
+    /// at — the memory, folder and tag screens it named were removed
+    /// with their tabs, and dropping the user at the gallery root is
+    /// the honest fallback rather than a dead end.
+    func handle(_ url: URL) {
+        guard WidgetDeepLink.parse(url) != nil else { return }
+        photoLibraryPath = []
     }
 }
 
-/// Typed navigation values for the Folders tab. Hosting the path at the tab
-/// root lets widget deep-links push directly into a folder.
-enum FolderRoute: Hashable {
-    case browser(PhotoFolder)
-    case grid(PhotoFolder)
-}
-
-/// Typed navigation values for the Photos tab — the device's own Photos
+/// Typed navigation values for the gallery — the device's own Photos
 /// library.
 enum PhotoLibraryRoute: Hashable {
-    /// One album's assets, in chronological order.
+    /// One album's assets.
     case album(PhotoKitAlbum)
+}
+
+/// Typed nav stack values for the Collections screens.
+///
+/// The Collections tab was removed with the other tabs, so nothing in
+/// the app's navigation pushes these routes any more. The type stays
+/// because the (now unreachable) Collections views still reference it,
+/// and their shared services — memories, people, tagging — remain part
+/// of the app's background machinery.
+enum CollectionsRoute: Hashable {
+    case slideshow(Memory)
+    case memoryGrid(Memory)
+    case peopleList
+    case personGrid(TagSuggestion)
+    /// The on-device face review queue — unlabeled clusters waiting for a name.
+    case peopleReview
+    /// One cluster's faces, with Name / Not a person.
+    case clusterReview(Int64)
+    /// A suggested merge: every face in the paired groups, with Select to
+    /// pick which clusters actually merge.
+    case mergeProposal([Int64])
+}
+
+/// Whether Collections shows a People section.
+///
+/// Named people are the usual reason. Unlabeled face groups are the other:
+/// they live on the People list, so hiding the section until someone is named
+/// made that list — and its review row — unreachable on a fresh library. A
+/// scan in flight is the third, so the header exists as a destination while
+/// faces are still being found.
+enum PeopleSectionVisibility {
+    static func shouldShow(namedPeople: Int, reviewableClusters: Int, scanning: Bool) -> Bool {
+        namedPeople > 0 || reviewableClusters > 0 || scanning
+    }
 }
