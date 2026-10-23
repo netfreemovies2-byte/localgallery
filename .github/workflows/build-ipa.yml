@@ -427,6 +427,31 @@ jobs:
           for w, n in sorted(per_inv, reverse=True)[:15]: print(f"  {w:.2f}s  {n}")
           PYEOF
           cat "$ROOT/swift-stats-summary.txt" || true
+          # Object-file inventory: each primary input that finishes its
+          # backend phase leaves a .o in Objects-normal/arm64. Comparing
+          # the SwiftFileList against the .o files present when the time
+          # box fired names the primary (or primaries) that never
+          # finished - the sharpest bisect signal available for a
+          # post-type-check hang.
+          OBJDIR="$DERIVED/Build/Intermediates.noindex/LocalGallery.build/Release-iphoneos/LocalGallery.build/Objects-normal/arm64"
+          python3 - "$OBJDIR" > "$ROOT/object-files.txt" 2>&1 << 'PYEOF' || true
+          import os, sys
+          objdir = sys.argv[1]
+          fl = os.path.join(objdir, 'LocalGallery.SwiftFileList')
+          names = []
+          if os.path.exists(fl):
+              names = [os.path.basename(l.strip()) for l in open(fl) if l.strip().endswith('.swift')]
+          present = set(os.listdir(objdir)) if os.path.isdir(objdir) else set()
+          print(f"total swift inputs: {len(names)}")
+          missing = []
+          for n in names:
+              obj = n[:-len('.swift')] + '.o'
+              if obj not in present: missing.append(n)
+          print(f"object files present: {len(names) - len(missing)}")
+          print("MISSING .o (backend never finished):")
+          for n in missing: print(f"  {n}")
+          PYEOF
+          cat "$ROOT/object-files.txt" || true
 
       - name: Upload diagnostic build log
         if: always()
@@ -436,6 +461,7 @@ jobs:
           path: |
             xcodebuild-build.log
             swift-stats-summary.txt
+            object-files.txt
             build/swift-stats
           if-no-files-found: warn
           retention-days: 14
