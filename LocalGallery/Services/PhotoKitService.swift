@@ -258,7 +258,13 @@ final class PhotoKitService {
 
         let avAsset: AVAsset? = await withCheckedContinuation { continuation in
             PHImageManager.default().requestAVAsset(forVideo: asset, options: options) { avAsset, _, _ in
-                continuation.resume(returning: avAsset)
+                // PhotoKit delivers the asset on its own queue, outside
+                // this type's main-actor isolation. `AVAsset` is immutable
+                // and documented thread-safe, so hand it across explicitly
+                // instead of letting the region checker treat the resume
+                // as a racy send of a main-actor-isolated value.
+                nonisolated(unsafe) let deliveredAsset = avAsset
+                continuation.resume(returning: deliveredAsset)
             }
         }
         guard let avAsset else { return nil }
