@@ -142,6 +142,9 @@ targets:
         # to state itself. ORT is C++ (`-lc++`) and its Apple build references
         # CoreML symbols even with the CPU execution provider.
         OTHER_LDFLAGS: -lc++ -framework CoreML
+        # Disable Whole Module Optimization to avoid Swift compile timeouts
+        # in CI (90-minute cap). Use "wholetarget" incremental mode instead.
+        SWIFT_COMPILATION_MODE: wholetarget
         # UniFFI C decls. Same header bindgen just wrote — not the
         # xcframework clang module, which Xcode caches across core rebuilds
         # and then hides new symbols (HeicDecoder FFI "not in scope").
