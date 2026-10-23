@@ -44,7 +44,7 @@
 	<key>NSContactsUsageDescription</key>
 	<string>Pixel Pic uses your contacts to surface birthday memories for the people in your photos. Names are matched only against your photo tags — nothing leaves the device.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
-	<string>Pixel Pic shows the photos already on this device — your camera roll, screenshots and your own albums — so you can browse them alongside your folders. Nothing is uploaded and nothing leaves the device.</string>
+	<string>Pixel Pic shows the photos already on this device — your Camera, Screenshots and your own albums. Nothing is uploaded and nothing leaves the device.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>Pixel Pic only saves to your photo library when you explicitly ask it to. Nothing is added without your say-so.</string>
 	<key>UIApplicationSceneManifest</key>
