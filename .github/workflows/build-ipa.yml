@@ -15,6 +15,18 @@ on:
         description: "Diag only: comma-separated repo-relative .swift files to delete before compiling (bisect)"
         required: false
         default: ""
+      bundle_url:
+        description: "Import only: HTTPS URL of a git bundle to fast-forward this branch to (build/diag jobs are skipped when set)"
+        required: false
+        default: ""
+      bundle_sha:
+        description: "Import only: expected commit SHA the bundle HEAD must match before pushing"
+        required: false
+        default: ""
+      bundle_sha256:
+        description: "Import only: expected SHA-256 of the bundle file itself"
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -40,8 +52,35 @@ env:
   EXPECTED_DISPLAY_NAME: "Pixel Pic"
 
 jobs:
+  import-bundle:
+    if: ${{ inputs.bundle_url != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          fetch-depth: 0
+      - name: Fast-forward branch to the bundle HEAD
+        env:
+          BUNDLE_URL: ${{ inputs.bundle_url }}
+          EXPECTED_SHA: ${{ inputs.bundle_sha }}
+          EXPECTED_SHA256: ${{ inputs.bundle_sha256 }}
+        run: |
+          set -euo pipefail
+          curl -fL "$BUNDLE_URL" -o /tmp/import.bundle
+          echo "$EXPECTED_SHA256  /tmp/import.bundle" | sha256sum -c -
+          git bundle verify /tmp/import.bundle
+          git fetch /tmp/import.bundle HEAD:refs/imported-head
+          ACTUAL="$(git rev-parse refs/imported-head)"
+          echo "Bundle HEAD: $ACTUAL (expected: $EXPECTED_SHA)"
+          test "$ACTUAL" = "$EXPECTED_SHA"
+          git push origin refs/imported-head:refs/heads/pixel-pic-redesign
+          echo "Branch fast-forwarded to $ACTUAL"
   build:
-    if: ${{ inputs.mode != 'diag' }}
+    if: ${{ inputs.mode != 'diag' && inputs.bundle_url == '' }}
     runs-on: macos-26
     timeout-minutes: 90
     steps:
@@ -300,7 +339,7 @@ jobs:
           retention-days: 14
 
   diag:
-    if: ${{ inputs.mode == 'diag' }}
+    if: ${{ inputs.mode == 'diag' && inputs.bundle_url == '' }}
     runs-on: macos-26
     timeout-minutes: 30
     steps:
