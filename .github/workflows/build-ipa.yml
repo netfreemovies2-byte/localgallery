@@ -1,4 +1,4 @@
-name: Build LocalGallery IPA
+name: Build Pixel Pic IPA
 
 on:
   workflow_dispatch:
@@ -13,18 +13,6 @@ on:
           - diag
       exclude_files:
         description: "Diag only: comma-separated repo-relative .swift files to delete before compiling (bisect)"
-        required: false
-        default: ""
-      bundle_url:
-        description: "Import only: HTTPS URL of a git bundle to fast-forward this branch to (build/diag jobs are skipped when set)"
-        required: false
-        default: ""
-      bundle_sha:
-        description: "Import only: expected commit SHA the bundle HEAD must match before pushing"
-        required: false
-        default: ""
-      bundle_sha256:
-        description: "Import only: expected SHA-256 of the bundle file itself"
         required: false
         default: ""
 
@@ -43,44 +31,17 @@ env:
   CARGO_INCREMENTAL: "0"
   XCODE_VERSION: "26.6"
   # Values the packaged app is validated against (see project.yml).
-  EXPECTED_BUNDLE_ID: com.j23n.localgallery.app
-  EXPECTED_WIDGET_BUNDLE_ID: com.j23n.localgallery.app.widgets
+  EXPECTED_BUNDLE_ID: com.j23n.pixelpic.app
+  EXPECTED_WIDGET_BUNDLE_ID: com.j23n.pixelpic.app.widgets
   EXPECTED_MIN_OS: "18.0"
   # The Home Screen name. Checked in the built product, not just in the
   # source, so a wrong or dropped CFBundleDisplayName fails the build
-  # instead of shipping an app labelled "LocalGallery".
+  # instead of shipping an app labelled "Pixel Pic".
   EXPECTED_DISPLAY_NAME: "Pixel Pic"
 
 jobs:
-  import-bundle:
-    if: ${{ inputs.bundle_url != '' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    permissions:
-      contents: write
-    steps:
-      - name: Checkout source
-        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
-        with:
-          fetch-depth: 0
-      - name: Fast-forward branch to the bundle HEAD
-        env:
-          BUNDLE_URL: ${{ inputs.bundle_url }}
-          EXPECTED_SHA: ${{ inputs.bundle_sha }}
-          EXPECTED_SHA256: ${{ inputs.bundle_sha256 }}
-        run: |
-          set -euo pipefail
-          curl -fL "$BUNDLE_URL" -o /tmp/import.bundle
-          echo "$EXPECTED_SHA256  /tmp/import.bundle" | sha256sum -c -
-          git bundle verify /tmp/import.bundle
-          git fetch /tmp/import.bundle HEAD:refs/imported-head
-          ACTUAL="$(git rev-parse refs/imported-head)"
-          echo "Bundle HEAD: $ACTUAL (expected: $EXPECTED_SHA)"
-          test "$ACTUAL" = "$EXPECTED_SHA"
-          git push origin refs/imported-head:refs/heads/pixel-pic-redesign
-          echo "Branch fast-forwarded to $ACTUAL"
   build:
-    if: ${{ inputs.mode != 'diag' && inputs.bundle_url == '' }}
+    if: ${{ inputs.mode != 'diag' }}
     runs-on: macos-26
     timeout-minutes: 90
     steps:
@@ -131,11 +92,16 @@ jobs:
           rm -rf "$DERIVED" "$ROOT/build/ipa"
           mkdir -p "$ROOT/build"
 
+          # No SWIFT_COMPILATION_MODE / SWIFT_OPTIMIZATION_LEVEL /
+          # OTHER_SWIFT_FLAGS overrides: the project's own Release
+          # defaults apply (-O, incremental per project.yml). The
+          # -Onone era shipped a *.debug.dylib; the validate step
+          # below fails the build if one ever appears again.
           # pipefail (above) makes an xcodebuild failure fail this step even
           # though its output is piped through tee.
           xcodebuild \
-            -project "$ROOT/LocalGallery.xcodeproj" \
-            -scheme LocalGallery \
+            -project "$ROOT/PixelPic.xcodeproj" \
+            -scheme PixelPic \
             -configuration Release \
             -sdk iphoneos \
             -destination "generic/platform=iOS" \
@@ -144,9 +110,6 @@ jobs:
             CODE_SIGN_IDENTITY="" \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO \
-            SWIFT_COMPILATION_MODE=singlefile \
-            SWIFT_OPTIMIZATION_LEVEL=-Onone \
-            OTHER_SWIFT_FLAGS="-Xfrontend -debug-time-function-bodies" \
             build 2>&1 | tee "$ROOT/xcodebuild-build.log"
 
       - name: Locate and validate app bundle
@@ -160,10 +123,10 @@ jobs:
           APPS=()
           while IFS= read -r line; do
             APPS+=("$line")
-          done < <(find "$PRODUCTS" -maxdepth 2 -type d -name 'LocalGallery.app' -path '*/Release-iphoneos/*' 2>/dev/null | sort)
+          done < <(find "$PRODUCTS" -maxdepth 2 -type d -name 'PixelPic.app' -path '*/Release-iphoneos/*' 2>/dev/null | sort)
 
           if [[ "${#APPS[@]}" -ne 1 ]]; then
-            echo "::error::Expected exactly one Release-iphoneos/LocalGallery.app under $PRODUCTS, found ${#APPS[@]}."
+            echo "::error::Expected exactly one Release-iphoneos/PixelPic.app under $PRODUCTS, found ${#APPS[@]}."
             echo "App bundles found under DerivedData:"
             find "$GITHUB_WORKSPACE/build/DerivedData" -type d \( -name '*.app' -o -name '*.appex' \) -print 2>/dev/null | head -100 || true
             exit 1
@@ -217,12 +180,21 @@ jobs:
             fi
           fi
 
-          WIDGET="$APP/PlugIns/LocalGalleryWidgets.appex"
+          WIDGET="$APP/PlugIns/PixelPicWidgets.appex"
           if [[ ! -f "$WIDGET/Info.plist" ]]; then
             echo "::error::Widget extension is missing from the app bundle"
             fail=1
           else
             check "$(pb CFBundleIdentifier "$WIDGET/Info.plist")" "$EXPECTED_WIDGET_BUNDLE_ID" "Widget CFBundleIdentifier"
+          fi
+
+          # Genuine optimized Release: the -Onone CI override era
+          # shipped a *.debug.dylib in the bundle. Its presence now
+          # fails the build — this is the check that the project's
+          # Release defaults (-O) really applied.
+          if find "$APP" -name '*.debug.dylib' -print -quit | grep -q .; then
+            echo "::error::App bundle contains a *.debug.dylib — the build was not optimized (-Onone override still active?)"
+            fail=1
           fi
 
           if [[ "$fail" -ne 0 ]]; then
@@ -243,7 +215,7 @@ jobs:
           IPA_DIR="$GITHUB_WORKSPACE/build/ipa"
           rm -rf "$IPA_DIR"
           mkdir -p "$IPA_DIR/Payload"
-          ditto "$APP" "$IPA_DIR/Payload/LocalGallery.app"
+          ditto "$APP" "$IPA_DIR/Payload/PixelPic.app"
           (cd "$IPA_DIR" && /usr/bin/zip -qry -X PixelPic.ipa Payload)
           ls -l "$IPA_DIR/PixelPic.ipa"
 
@@ -263,13 +235,13 @@ jobs:
               fail=1
             fi
           }
-          need "Payload/LocalGallery.app/Info.plist"
-          need "Payload/LocalGallery.app/$EXE"
-          need "Payload/LocalGallery.app/PlugIns/LocalGalleryWidgets.appex/Info.plist"
+          need "Payload/PixelPic.app/Info.plist"
+          need "Payload/PixelPic.app/$EXE"
+          need "Payload/PixelPic.app/PlugIns/PixelPicWidgets.appex/Info.plist"
 
           # Everything must live under exactly one Payload/<name>.app directory.
           TOPS="$(grep -oE '^Payload/[^/]+' <<<"$LIST" | sort -u)"
-          if [[ "$TOPS" != "Payload/LocalGallery.app" ]]; then
+          if [[ "$TOPS" != "Payload/PixelPic.app" ]]; then
             echo "::error::Unexpected top-level entries in IPA: $TOPS"
             fail=1
           fi
@@ -280,15 +252,15 @@ jobs:
 
           # Re-read Info.plist from the packaged IPA itself, not from the build dir.
           TMP="$(mktemp -d)"
-          unzip -q "$IPA" "Payload/LocalGallery.app/Info.plist" -d "$TMP"
-          IPA_BUNDLE_ID="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$TMP/Payload/LocalGallery.app/Info.plist")"
+          unzip -q "$IPA" "Payload/PixelPic.app/Info.plist" -d "$TMP"
+          IPA_BUNDLE_ID="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$TMP/Payload/PixelPic.app/Info.plist")"
           if [[ "$IPA_BUNDLE_ID" != "$EXPECTED_BUNDLE_ID" ]]; then
             echo "::error::IPA bundle id is '$IPA_BUNDLE_ID', expected '$EXPECTED_BUNDLE_ID'"
             fail=1
           fi
           # The label the user sees on the Home Screen, read from the
           # packaged IPA so the shipped bundle is what is checked.
-          IPA_DISPLAY_NAME="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' "$TMP/Payload/LocalGallery.app/Info.plist" 2>/dev/null || true)"
+          IPA_DISPLAY_NAME="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' "$TMP/Payload/PixelPic.app/Info.plist" 2>/dev/null || true)"
           if [[ "$IPA_DISPLAY_NAME" != "$EXPECTED_DISPLAY_NAME" ]]; then
             echo "::error::IPA CFBundleDisplayName is '$IPA_DISPLAY_NAME', expected '$EXPECTED_DISPLAY_NAME'"
             fail=1
@@ -308,7 +280,7 @@ jobs:
             echo "- File: \`PixelPic.ipa\` ($SIZE), version $VERSION ($BUILD)"
             echo "- Bundle id: \`$IPA_BUNDLE_ID\`, device build (iPhoneOS, arm64), min iOS $EXPECTED_MIN_OS"
             echo "- Home Screen name: \`$IPA_DISPLAY_NAME\`"
-            echo "- Structure verified: \`Payload/LocalGallery.app\` with Info.plist, executable and widget extension"
+            echo "- Structure verified: \`Payload/PixelPic.app\` with Info.plist, executable and widget extension"
             echo
             echo "**Signing status: UNSIGNED.** Built with code signing disabled. This is a valid package but it will"
             echo "**not install on an iPhone as-is**. It must be re-signed with a certificate and provisioning profile"
@@ -338,8 +310,130 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
+  test:
+    if: ${{ inputs.mode != 'diag' }}
+    name: Unit tests (simulator)
+    runs-on: macos-26
+    timeout-minutes: 90
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Select Xcode
+        uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1.7.0
+        with:
+          xcode-version: "${{ env.XCODE_VERSION }}"
+
+      - name: Install Rust toolchain and iOS targets
+        uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0 # 2026-09-03
+        with:
+          toolchain: "1.97.1"
+          targets: aarch64-apple-darwin,aarch64-apple-ios,aarch64-apple-ios-sim
+
+      - name: Show toolchain versions
+        run: |
+          xcodebuild -version
+          rustc --version
+          cargo --version
+
+      - name: Install pinned XcodeGen
+        run: /bin/bash scripts/install_xcodegen.sh
+
+      - name: Stage model pack (optional)
+        run: /bin/bash scripts/prepare_pack.sh --optional
+
+      - name: Build Rust bindings and XCFramework
+        run: /bin/bash scripts/build_core.sh
+
+      - name: Generate Xcode project
+        run: xcodegen
+
+      - name: Pick a simulator
+        id: pick
+        run: |
+          NAME="$(/bin/bash scripts/pick_ios_simulator.sh)"
+          echo "device_name=$NAME" >> "$GITHUB_OUTPUT"
+          echo "using simulator: $NAME"
+
+      - name: Run unit tests
+        run: |
+          xcodebuild test \
+            -project PixelPic.xcodeproj \
+            -scheme PixelPic \
+            -destination "platform=iOS Simulator,name=${{ steps.pick.outputs.device_name }}" \
+            -testLanguage en \
+            -testRegion US \
+            -resultBundlePath TestResults.xcresult \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            2>&1 | tee xcodebuild-test.log
+
+      - name: Upload test log
+        if: always()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: xcodebuild-test-log
+          path: |
+            xcodebuild-test.log
+            TestResults.xcresult
+          if-no-files-found: ignore
+          retention-days: 14
+
+  lint:
+    if: ${{ inputs.mode != 'diag' }}
+    name: SwiftLint (informational)
+    runs-on: macos-26
+    timeout-minutes: 20
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Run SwiftLint
+        run: |
+          # SwiftLint ships in the macOS runner image; fall back to
+          # brew (also free) if a future image drops it.
+          if ! command -v swiftlint >/dev/null 2>&1; then
+            brew install swiftlint
+          fi
+          swiftlint --version
+          # Informational by design for this release: the report is
+          # the deliverable (artifact + summary below), not a gate.
+          # `|| true` keeps a lint finding from failing the job; a
+          # *broken config* still shows up as an empty/garbled
+          # report, which the summary makes visible.
+          swiftlint lint --reporter json > swiftlint-report.json 2> swiftlint-stderr.txt || true
+          COUNT="$(jq 'length' swiftlint-report.json 2>/dev/null || echo 'unparseable')"
+          {
+            echo "## SwiftLint (informational — not a build gate)"
+            echo ""
+            echo "Violations: $COUNT"
+            echo ""
+            if [[ "$COUNT" != "unparseable" && "$COUNT" != "0" ]]; then
+              echo "| Rule | Count |"
+              echo "| --- | --- |"
+              jq -r 'group_by(.rule_id)[] | "| \(.[0].rule_id) | \(length) |"' swiftlint-report.json | sort
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          cat swiftlint-stderr.txt
+
+      - name: Upload SwiftLint report
+        if: always()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: swiftlint-report
+          path: |
+            swiftlint-report.json
+            swiftlint-stderr.txt
+          if-no-files-found: warn
+          retention-days: 14
+
   diag:
-    if: ${{ inputs.mode == 'diag' && inputs.bundle_url == '' }}
+    if: ${{ inputs.mode == 'diag' }}
     runs-on: macos-26
     timeout-minutes: 30
     steps:
@@ -402,8 +496,8 @@ jobs:
           # background and a watchdog loop enforces the 900s cap.
           set +e
           xcodebuild \
-            -project "$ROOT/LocalGallery.xcodeproj" \
-            -scheme LocalGallery \
+            -project "$ROOT/PixelPic.xcodeproj" \
+            -scheme PixelPic \
             -configuration Release \
             -sdk iphoneos \
             -destination "generic/platform=iOS" \
@@ -472,11 +566,11 @@ jobs:
           # box fired names the primary (or primaries) that never
           # finished - the sharpest bisect signal available for a
           # post-type-check hang.
-          OBJDIR="$DERIVED/Build/Intermediates.noindex/LocalGallery.build/Release-iphoneos/LocalGallery.build/Objects-normal/arm64"
+          OBJDIR="$DERIVED/Build/Intermediates.noindex/PixelPic.build/Release-iphoneos/PixelPic.build/Objects-normal/arm64"
           python3 - "$OBJDIR" > "$ROOT/object-files.txt" 2>&1 << 'PYEOF' || true
           import os, sys
           objdir = sys.argv[1]
-          fl = os.path.join(objdir, 'LocalGallery.SwiftFileList')
+          fl = os.path.join(objdir, 'PixelPic.SwiftFileList')
           names = []
           if os.path.exists(fl):
               names = [os.path.basename(l.strip()) for l in open(fl) if l.strip().endswith('.swift')]
