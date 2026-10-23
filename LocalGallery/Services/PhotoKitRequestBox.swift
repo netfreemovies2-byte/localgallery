@@ -21,6 +21,15 @@ import UIKit
 /// would block on the lock, while the inline task waits for it) — so
 /// holding the lock across a `resume` is a deadlock waiting for the right
 /// interleaving.
+///
+/// Implementation note: the lock is taken with explicit `lock()` /
+/// `unlock()` pairs and plain local variables instead of value-returning
+/// `withLock` closures. The previous formulation — generic `withLock`
+/// closures returning an enum with an associated value, in this specific
+/// combination of `NSLock`, `CheckedContinuation` and a `UIImage?`
+/// payload — sent the Swift compiler's post-type-check phases into a
+/// non-terminating loop on the Xcode 26.6 toolchain (diagnosed by
+/// file-level bisection in CI, October 2026). The behavior is unchanged.
 final class PhotoKitRequestBox: @unchecked Sendable {
     private let lock = NSLock()
     private var requestID: PHImageRequestID = PHInvalidImageRequestID
@@ -37,18 +46,18 @@ final class PhotoKitRequestBox: @unchecked Sendable {
     /// Hand the continuation over before the request is issued, so a
     /// result that arrives immediately still finds one.
     func attach(_ continuation: CheckedContinuation<UIImage?, Never>) {
-        lock.withLock {
-            self.continuation = continuation
-        }
+        lock.lock()
+        self.continuation = continuation
+        lock.unlock()
     }
 
     /// Record the request id. If the request was already cancelled, the
     /// id is cancelled right away rather than leaked.
     func setRequestID(_ id: PHImageRequestID) {
-        let shouldCancel: Bool = lock.withLock {
-            requestID = id
-            return cancelled
-        }
+        lock.lock()
+        requestID = id
+        let shouldCancel = cancelled
+        lock.unlock()
         if shouldCancel {
             PHImageManager.default().cancelImageRequest(id)
         }
@@ -58,35 +67,39 @@ final class PhotoKitRequestBox: @unchecked Sendable {
     func deliver(_ image: UIImage?, degraded: Bool, failed: Bool) {
         // The decision is made under the lock; the resume happens after it
         // is released.
-        let decision: Decision = lock.withLock {
-            if degraded {
-                // A degraded delivery is a placeholder — the good one is
-                // still coming. Keep it as a fallback, but do not resume:
-                // resuming here would hand the caller the small image and
-                // never the real one.
-                if let image { degradedImage = image }
-                return .keepWaiting
-            }
-            if failed, image == nil {
-                // Nothing more is coming. Fall back to the degraded image if
-                // there was one, so a cell shows a small picture rather than
-                // nothing at all.
-                return .finish(degradedImage)
-            }
-            guard let image else { return .keepWaiting }
-            return .finish(image)
+        lock.lock()
+        var shouldResume = false
+        var resumeImage: UIImage?
+        if degraded {
+            // A degraded delivery is a placeholder — the good one is
+            // still coming. Keep it as a fallback, but do not resume:
+            // resuming here would hand the caller the small image and
+            // never the real one.
+            if let image { degradedImage = image }
+        } else if failed, image == nil {
+            // Nothing more is coming. Fall back to the degraded image if
+            // there was one, so a cell shows a small picture rather than
+            // nothing at all.
+            shouldResume = true
+            resumeImage = degradedImage
+        } else if let image {
+            shouldResume = true
+            resumeImage = image
         }
-        if case .finish(let image) = decision {
-            resume(with: image)
+        // A delivery with no image and no error changes nothing: the box
+        // keeps waiting for a later delivery.
+        lock.unlock()
+        if shouldResume {
+            resume(with: resumeImage)
         }
     }
 
     /// Cancel the request and release the continuation.
     func cancel() {
-        let id: PHImageRequestID = lock.withLock {
-            cancelled = true
-            return requestID
-        }
+        lock.lock()
+        cancelled = true
+        let id = requestID
+        lock.unlock()
         resume(with: nil)
         if id != PHInvalidImageRequestID {
             PHImageManager.default().cancelImageRequest(id)
@@ -95,23 +108,14 @@ final class PhotoKitRequestBox: @unchecked Sendable {
 
     /// Resume exactly once, outside the lock.
     private func resume(with image: UIImage?) {
-        let continuation: CheckedContinuation<UIImage?, Never>? = lock.withLock {
-            guard !resumed, let continuation else { return nil }
+        lock.lock()
+        var toResume: CheckedContinuation<UIImage?, Never>?
+        if !resumed, let continuation {
             resumed = true
             self.continuation = nil
-            return continuation
+            toResume = continuation
         }
-        continuation?.resume(returning: image)
-    }
-
-    /// What a PhotoKit delivery means for the pending continuation.
-    private enum Decision {
-        /// Keep waiting — a degraded image arrived, or a delivery carried
-        /// no image and no error.
-        case keepWaiting
-        /// This is the last delivery; resume with the given image (which
-        /// may be `nil`).
-        case finish(UIImage?)
+        lock.unlock()
+        toResume?.resume(returning: image)
     }
 }
-
