@@ -11,20 +11,23 @@ import os
 /// than another source of `PhotoFile`s: a `PHAsset` has no file URL, no
 /// stable SHA-256 identity, and no sidecar — the folder pipeline's whole
 /// model (scan → sidecars → tags → memories) does not apply to it.
-/// Folding Camera Roll into `allPhotos` would mean inventing a fake URL
-/// for every asset and dragging the whole Rust scan pipeline over a
-/// library the system already indexes.
+/// Folding the device library into `allPhotos` would mean inventing a
+/// fake URL for every asset and dragging the whole Rust scan pipeline
+/// over a library the system already indexes.
 ///
 /// What this service owns:
 ///
 /// * **Access** — the read/write authorization state, with a request the
 ///   user can actually answer, and a way back into Settings when the
 ///   answer was no.
-/// * **Albums** — Camera Roll, Recents, Screenshots, Videos, Favorites
-///   and the user's own albums, each with a cover and a count.
-/// * **Thumbnails** — requested at cell size through `PHImageManager` and
-///   cached in memory. Full-resolution pixels are only ever requested for
-///   the one photo the viewer is showing.
+/// * **Albums** — Camera, Screenshots, Videos, Favorites and the user's
+///   own albums, each with a cover and a count.
+/// * **Live updates** — a `PHPhotoLibraryChangeObserver` registration, so
+///   a photo or screenshot taken while the app is open appears without
+///   the user closing and reopening the app.
+/// * **Thumbnails** — requested at cell size through `PHImageManager`
+///   and cached in memory. Full-resolution pixels are only ever
+///   requested for the one photo the viewer is showing.
 /// * **Export** — the original bytes written to a temporary file, so the
 ///   share sheet has something real to hand over.
 ///
@@ -41,8 +44,6 @@ final class PhotoKitService {
     var authorization: PhotoKitAuthorization = .notDetermined
     /// The albums to show. Empty until the library has been read.
     var albums: [PhotoKitAlbum] = []
-    /// The Camera Roll's assets, newest first. This is the timeline.
-    var cameraRoll: [PhotoKitAsset] = []
     /// True while a load is in flight. The views use it to tell "no access
     /// yet" apart from "no photos".
     var isLoading = false
@@ -51,47 +52,43 @@ final class PhotoKitService {
     /// True once a load has completed at least once — so a *successful but
     /// empty* library is distinguishable from one that never loaded.
     var hasLoaded = false
-    /// Set when a page came back empty, so the timeline stops asking for
-    /// more. The total the paging compares against was read when the albums
-    /// were enumerated, and the library can shrink in between.
-    private var hasReachedTheEnd = false
+    /// Bumped every time a Photos-library change has been applied to
+    /// `albums`. Album grids observe it to reload their visible page, so
+    /// a new screenshot shows up in an open album without a manual
+    /// refresh. Starts at 0; the initial load does not bump it.
+    var libraryChangeToken = 0
 
-    /// How many assets the timeline fetches up front.
+    /// The change-observer bridge, once registered. Registration is for
+    /// the app's lifetime: this service is owned by `GalleryStore`,
+    /// which the app root holds as `@State`, so there is no teardown
+    /// moment to unregister at.
+    @ObservationIgnored
+    private var changeObserver: PhotoKitLibraryChangeObserver?
+    /// True while a change-driven refresh is running. A burst of changes
+    /// (a burst of screenshots, an import) coalesces into at most one
+    /// extra pass instead of a queue of full refreshes.
+    @ObservationIgnored
+    private var isRefreshingAfterChange = false
+    /// Set when a change arrives during a change-driven refresh.
+    @ObservationIgnored
+    private var needsRefreshAfterChange = false
+
+    /// How many assets an album grid fetches up front.
     ///
-    /// A device can hold 100k assets; fetching them all up front would
-    /// stall the first paint. The timeline pages in more as the user
-    /// scrolls (see `loadMoreCameraRoll`), and the *album* counts come
-    /// from PhotoKit's own count, which is exact without loading the
+    /// An album can hold 100k assets; fetching them all up front would
+    /// stall the first paint. The grid pages in more as the user scrolls
+    /// (see `PhotoKitAlbumDetailView`), and the *album* counts come from
+    /// PhotoKit's own counts, which are exact without loading the
     /// assets.
-    static let initialCameraRollLimit = 600
+    static let initialAlbumLimit = 600
     /// How many more assets each "load more" pass pulls in.
-    static let cameraRollPageSize = 600
-
-    /// Whether the timeline has more assets to pull in.
-    ///
-    /// The total comes from PhotoKit's own count, so this is exact
-    /// without loading every asset — and it means the paging sentinel
-    /// disappears by itself once the whole library is on screen.
-    var hasMoreToLoad: Bool {
-        !hasReachedTheEnd
-            && PhotoKitLibraryRules.hasMore(fetched: cameraRoll.count, total: totalAssetCount)
-    }
-
-    /// How many assets the library holds in total.
-    ///
-    /// PhotoKit's own count for the whole library, so it is exact without
-    /// loading every asset. The viewer's "N of M" readout uses it, so the
-    /// number is the library's size rather than the number of assets that
-    /// happen to have been paged in.
-    var totalAssetCount: Int {
-        albums.first { $0.kind == .cameraRoll }?.count ?? cameraRoll.count
-    }
+    static let albumPageSize = 600
 
     // MARK: - Access
 
     /// Re-read the authorization status. Cheap; safe to call on every
-    /// appearance of the Camera Roll tab, which is what makes the state
-    /// recover after the user changes it in Settings and comes back.
+    /// appearance of the gallery, which is what makes the state recover
+    /// after the user changes it in Settings and comes back.
     func refreshAuthorization() {
         let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
         let mapped = PhotoKitAuthorization.map(status)
@@ -126,9 +123,57 @@ final class PhotoKitService {
         }
     }
 
+    // MARK: - Live updates
+
+    /// Register for Photos-library change notifications. Idempotent.
+    ///
+    /// This is what makes a new screenshot appear while the app is open:
+    /// PhotoKit calls the observer as soon as the library changes — the
+    /// user does not have to relaunch, pull to refresh, or re-open the
+    /// album.
+    func startObservingLibraryChanges() {
+        guard changeObserver == nil else { return }
+        let observer = PhotoKitLibraryChangeObserver()
+        observer.onChange = { [weak self] in
+            guard let self else { return }
+            Task { @MainActor in
+                await self.handleLibraryChange()
+            }
+        }
+        changeObserver = observer
+        PHPhotoLibrary.shared().register(observer)
+        Log.photokit.info("Observing Photos library changes")
+    }
+
+    /// Apply one Photos-library change: re-read the album list (counts
+    /// and covers) and bump `libraryChangeToken` so any open album grid
+    /// reloads its page.
+    ///
+    /// Deliberately *not* a full reload of every album's assets: the
+    /// album list is counts and covers (cheap fetches), and each open
+    /// grid reloads only its own first page in response to the token.
+    private func handleLibraryChange() async {
+        refreshAuthorization()
+        guard authorization.isReadable else { return }
+        if isRefreshingAfterChange {
+            needsRefreshAfterChange = true
+            return
+        }
+        isRefreshingAfterChange = true
+        while true {
+            needsRefreshAfterChange = false
+            albums = await Self.fetchAlbums()
+            hasLoaded = true
+            libraryChangeToken += 1
+            if !needsRefreshAfterChange { break }
+        }
+        isRefreshingAfterChange = false
+        Log.photokit.info("Applied a Photos library change (token \(self.libraryChangeToken))")
+    }
+
     // MARK: - Library
 
-    /// Load the albums and the Camera Roll timeline.
+    /// Load the albums.
     ///
     /// A no-op when access has not been granted, so it is safe to call
     /// from a `.task` on a view the user has not answered the prompt on
@@ -137,69 +182,37 @@ final class PhotoKitService {
         refreshAuthorization()
         guard authorization.isReadable else {
             albums = []
-            cameraRoll = []
             hasLoaded = false
             return
         }
+        startObservingLibraryChanges()
         isLoading = true
         lastError = nil
-        hasReachedTheEnd = false
         let fetchedAlbums = await Self.fetchAlbums()
-        let assets = await Self.fetchCameraRoll(limit: Self.initialCameraRollLimit)
         albums = fetchedAlbums
-        cameraRoll = assets
         hasLoaded = true
-        Log.photokit.info("Loaded \(albums.count) albums, \(assets.count) timeline assets")
+        Log.photokit.info("Loaded \(albums.count) albums")
         isLoading = false
-    }
-
-    /// Pull the next page of the timeline. Called when the user scrolls to
-    /// the end of what has been fetched.
-    ///
-    /// Offset-based rather than "fetch N again": the offset survives a
-    /// photo being deleted (the page simply comes back short) and the
-    /// fetch does not re-walk everything already on screen.
-    func loadMoreCameraRoll() async {
-        guard authorization.isReadable, !isLoading, !hasReachedTheEnd else { return }
-        let fetched = cameraRoll.count
-        guard fetched > 0 else { return }
-        let offset = PhotoKitLibraryRules.nextOffset(fetched: fetched)
-        let limit = PhotoKitLibraryRules.pageSize(
-            fetched: fetched,
-            total: totalAssetCount,
-            page: Self.cameraRollPageSize
-        )
-        isLoading = true
-        let page = await Self.fetchCameraRoll(offset: offset, limit: limit)
-        isLoading = false
-        guard !page.isEmpty else {
-            // The library shrank since the albums were enumerated (a photo
-            // deleted from another app), so the count the sentinel compares
-            // against is stale. Stop asking — otherwise it would fetch an
-            // empty page for ever.
-            hasReachedTheEnd = true
-            return
-        }
-        cameraRoll.append(contentsOf: page)
     }
 
     /// One page of an album's assets, newest first.
     ///
-    /// Paged rather than fetched whole, because the Camera Roll album *is*
-    /// the whole library — a device with 100k photos would otherwise hold
-    /// 100k value structs in memory to render the first screen of a grid.
+    /// Paged rather than fetched whole, because an album can hold the
+    /// better part of a 100k-photo library — fetching it whole would
+    /// hold 100k value structs in memory to render the first screen of
+    /// a grid.
     ///
-    /// The Camera Roll is fetched through `fetchCameraRoll(offset:limit:)`
-    /// rather than through a `PHAssetCollection`, because it is "all
-    /// assets" and has no collection to fetch from.
+    /// The Camera album is fetched through `fetchCameraAssets` rather
+    /// than through a `PHAssetCollection`, because it is a filtered view
+    /// of the whole library and has no collection to fetch from.
     func albumPage(
         _ album: PhotoKitAlbum,
         offset: Int,
         limit: Int
     ) async -> [PhotoKitAsset] {
         guard authorization.isReadable else { return [] }
-        if album.kind == .cameraRoll {
-            return await Self.fetchCameraRoll(offset: offset, limit: limit)
+        if album.kind == .camera {
+            return await Self.fetchCameraAssets(offset: offset, limit: limit)
         }
         return await Self.fetchAssets(inAlbumWithID: album.id, offset: offset, limit: limit)
     }
@@ -226,6 +239,23 @@ final class PhotoKitService {
         ) else { return nil }
         PhotoKitThumbnailCache.shared.set(image, forKey: key)
         return image
+    }
+
+    /// Warm the thumbnail cache for a page of assets an album grid is
+    /// about to show, at the grid's cell size.
+    ///
+    /// Each warm goes through the ordinary `thumbnail(for:size:)` path,
+    /// so a warmed cell later hits the in-memory cache instead of paying
+    /// a cold decode as it scrolls into view. Sequential on purpose: the
+    /// point is to get *ahead* of the scroll, not to contend with it —
+    /// and a cell that scrolls into view first issues its own request
+    /// anyway, which the cache then serves to both.
+    func preheatThumbnails(for assetIDs: [String], size: CGFloat) async {
+        guard authorization.isReadable else { return }
+        for assetID in assetIDs {
+            if Task.isCancelled { return }
+            _ = await thumbnail(for: assetID, size: size)
+        }
     }
 
     /// A full-resolution image for the viewer.
@@ -308,7 +338,7 @@ final class PhotoKitService {
     // MARK: - Export & delete
 
     /// Write the original bytes of an asset to a temporary file so the
-    /// share sheet has something real to send.
+    /// share sheet has something real to hand over.
     ///
     /// PhotoKit has no "give me a URL" call — the bytes are behind a
     /// resource manager, and the app needs a file on disk to hand to
@@ -334,6 +364,35 @@ final class PhotoKitService {
                 }
             }
         }
+    }
+
+    /// Save an edited image as a **new** photo in the library.
+    ///
+    /// Edits never overwrite the original: the rendered pixels become a
+    /// new asset (the Photos change observer then refreshes the albums,
+    /// so the copy appears alongside the original). Saving needs the
+    /// same read/write access the gallery already holds; when the
+    /// system refuses — the user revoked write access — this returns
+    /// `false` and the editor says so rather than claiming a save that
+    /// did not happen.
+    func saveEditedImage(_ image: UIImage) async -> Bool {
+        guard authorization.isReadable else { return false }
+        guard let data = image.jpegData(compressionQuality: 0.92) else { return false }
+        let success: Bool = await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+            // The change block captures only the image data — the
+            // creation request is built inside it, so no PhotoKit
+            // object crosses into the closure.
+            PHPhotoLibrary.shared().performChanges({
+                let request = PHAssetCreationRequest.forAsset()
+                request.addResource(with: .photo, data: data, options: nil)
+            }) { ok, error in
+                if let error {
+                    Log.photokit.error("Edited photo save failed: \(Log.r.error(error))")
+                }
+                continuation.resume(returning: ok)
+            }
+        }
+        return success
     }
 
     /// Delete assets from the user's photo library.
@@ -397,34 +456,24 @@ final class PhotoKitService {
     /// The albums to show, in the order they should appear.
     ///
     /// The order is `PhotoKitLibraryRules.ordered(_:)`'s rule — see
-    /// there for why the system albums come first and the user's own
-    /// albums keep the system's order.
+    /// there for why Camera and the other system filters come first and
+    /// the user's own albums keep the system's order.
     nonisolated static func fetchAlbums() async -> [PhotoKitAlbum] {
         var result: [PhotoKitAlbum] = []
 
-        // "All assets" — the Camera Roll pseudo-album.
-        let all = PHAsset.fetchAssets(with: nil as PHFetchOptions?)
+        // "Camera" — the device's own camera captures, as a filtered
+        // fetch over the library (see `cameraFetchResult()` for the
+        // rule). Always present, even when empty: it is the primary
+        // album, and an empty Camera tile with a 0 count is a truer
+        // picture than no tile at all.
+        let camera = cameraAlbumSummary()
         result.append(PhotoKitAlbum(
-            id: PhotoKitAlbumID.cameraRoll,
-            title: "Camera Roll",
-            kind: .cameraRoll,
-            count: all.count,
-            coverAssetID: newestAssetID()
+            id: PhotoKitAlbumID.camera,
+            title: "Camera",
+            kind: .camera,
+            count: camera.count,
+            coverAssetID: camera.coverAssetID
         ))
-
-        // "Recents" — the system's own recently-added collection.
-        if let recents = fetchCollection(subtype: .smartAlbumRecentlyAdded, type: .smartAlbum) {
-            let count = assetCount(in: recents)
-            if count > 0 {
-                result.append(PhotoKitAlbum(
-                    id: recents.localIdentifier,
-                    title: "Recents",
-                    kind: .recents,
-                    count: count,
-                    coverAssetID: firstAssetID(in: recents)
-                ))
-            }
-        }
 
         // Screenshots / Videos / Favorites — smart albums that exist only
         // if the user has something to put in them.
@@ -464,30 +513,106 @@ final class PhotoKitService {
         return PhotoKitLibraryRules.ordered(result)
     }
 
-    /// The Camera Roll's assets, newest first.
-    nonisolated static func fetchCameraRoll(limit: Int) async -> [PhotoKitAsset] {
-        await fetchCameraRoll(offset: 0, limit: limit)
+    // MARK: - Camera filtering
+
+    /// Whether album grids sort oldest-first, from the user's Settings
+    /// choice. Newest-first (`false`) is the default and the classic
+    /// gallery order. Read from `UserDefaults` directly because the
+    /// fetches that use it are `nonisolated static` — there is no store
+    /// to ask down here.
+    nonisolated static var userSortAscending: Bool {
+        UserDefaults.standard.bool(forKey: "albumSortOldestFirst")
     }
 
-    /// The Camera Roll's assets, newest first, starting at `offset`.
-    nonisolated static func fetchCameraRoll(offset: Int, limit: Int) async -> [PhotoKitAsset] {
+    /// The fetch the Camera album is built from: the whole library,
+    /// with screenshots already excluded by predicate.
+    ///
+    /// **How "captured by the camera" is decided — and its limits.**
+    /// PhotoKit exposes no "shot on this iPhone" flag, so membership is
+    /// a rule over the metadata it *does* expose
+    /// (`PhotoKitLibraryRules.isCameraCapture`):
+    ///
+    /// * screenshots are excluded — by this fetch's predicate, and again
+    ///   by the rule, so the grid and the count can never disagree;
+    /// * assets synced from a computer (iTunes/Finder) are excluded —
+    ///   their `sourceType` carries `.typeITunesSynced`;
+    /// * assets from shared albums are excluded — `.typeCloudShared`.
+    ///
+    /// What remains is media that originated on this device. The honest
+    /// limit: an image another app *saved on the device* (a WhatsApp or
+    /// browser download) is, to PhotoKit, indistinguishable from a
+    /// camera photo — same source type, no distinguishing subtype — so
+    /// it can still appear in Camera. No metadata PhotoKit offers can
+    /// separate the two, and pretending otherwise would mean silently
+    /// presenting a guess as a fact. What the rule does guarantee is
+    /// that Camera is never the whole library under a new name:
+    /// screenshots, synced and shared media are always out, and the
+    /// count, cover and grid all come from this same filtered fetch.
+    private nonisolated static func cameraFetchResult(sortAscending: Bool) -> PHFetchResult<PHAsset> {
         let options = PHFetchOptions()
-        options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
-        if limit != Int.max {
-            options.fetchLimit = offset + limit
+        options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: sortAscending)]
+        options.predicate = NSPredicate(
+            format: "(mediaSubtypes & %d) == 0",
+            PHAssetMediaSubtype.photoScreenshot.rawValue
+        )
+        return PHAsset.fetchAssets(with: options)
+    }
+
+    /// The Camera rule applied to one asset.
+    private nonisolated static func isCameraCapture(_ asset: PHAsset) -> Bool {
+        PhotoKitLibraryRules.isCameraCapture(
+            isScreenshot: asset.mediaSubtypes.contains(.photoScreenshot),
+            isSyncedFromComputer: asset.sourceType.contains(.typeITunesSynced),
+            isCloudShared: asset.sourceType.contains(.typeCloudShared)
+        )
+    }
+
+    /// The Camera album's count and cover, from the same filtered fetch
+    /// the grid pages from — so the tile can never promise a count the
+    /// grid then fails to show.
+    private nonisolated static func cameraAlbumSummary() -> (count: Int, coverAssetID: String?) {
+        // Newest-first regardless of the grid sort preference: the
+        // tile's cover is the album's newest capture, the way every
+        // gallery app presents it.
+        let result = cameraFetchResult(sortAscending: false)
+        var count = 0
+        var coverAssetID: String?
+        for index in 0..<result.count {
+            let asset = result.object(at: index)
+            guard isCameraCapture(asset) else { continue }
+            if coverAssetID == nil {
+                coverAssetID = asset.localIdentifier
+            }
+            count += 1
         }
-        let result = PHAsset.fetchAssets(with: options)
-        guard offset < result.count else { return [] }
-        let end = min(result.count, offset + limit)
+        return (count, coverAssetID)
+    }
+
+    /// One page of the Camera album's assets, in the user's chosen
+    /// order (newest first unless they picked oldest-first).
+    ///
+    /// The fetch is walked rather than sliced: membership is a filter,
+    /// not a range, so "page 2" means "the next `limit` assets that
+    /// pass the rule after the first `offset` that did". The walk stops
+    /// as soon as the page is full.
+    nonisolated static func fetchCameraAssets(offset: Int, limit: Int) async -> [PhotoKitAsset] {
+        let result = cameraFetchResult(sortAscending: userSortAscending)
         var assets: [PhotoKitAsset] = []
-        assets.reserveCapacity(end - offset)
-        for index in offset..<end {
-            assets.append(PhotoKitAsset(asset: result.object(at: index)))
+        assets.reserveCapacity(min(limit, 1024))
+        var matched = 0
+        for index in 0..<result.count {
+            let asset = result.object(at: index)
+            guard isCameraCapture(asset) else { continue }
+            if matched >= offset {
+                assets.append(PhotoKitAsset(asset: asset))
+                if assets.count >= limit { break }
+            }
+            matched += 1
         }
         return assets
     }
 
-    /// One page of an album's assets, newest first.
+    /// One page of an album's assets, in the user's chosen order.
     nonisolated static func fetchAssets(
         inAlbumWithID id: String,
         offset: Int,
@@ -497,7 +622,7 @@ final class PhotoKitService {
             withLocalIdentifiers: [id], options: nil
         ).firstObject else { return [] }
         let options = PHFetchOptions()
-        options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
+        options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: userSortAscending)]
         if limit != Int.max {
             options.fetchLimit = offset + limit
         }
@@ -540,17 +665,17 @@ final class PhotoKitService {
         return PHAsset.fetchAssets(in: collection, options: options).firstObject?.localIdentifier
     }
 
-    /// The local id of the library's newest asset — the Camera Roll's
-    /// cover.
-    ///
-    /// The Camera Roll is not a collection, so it cannot go through
-    /// `firstAssetID(in:)`; the whole library is fetched with a sort
-    /// descriptor and the first object taken.
-    private nonisolated static func newestAssetID() -> String? {
-        let options = PHFetchOptions()
-        options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
-        options.fetchLimit = 1
-        return PHAsset.fetchAssets(with: options).firstObject?.localIdentifier
+    /// The request options shared by thumbnail requests and preheating.
+    private static func imageRequestOptions() -> PHImageRequestOptions {
+        let options = PHImageRequestOptions()
+        // Opportunistic delivery: PhotoKit may hand over a small, degraded
+        // image first and the good one a moment later. The box keeps the
+        // degraded one as a fallback and resumes on the good one, so a
+        // cell never shows a 100-pixel blur.
+        options.deliveryMode = .opportunistic
+        options.resizeMode = .fast
+        options.isNetworkAccessAllowed = true
+        return options
     }
 
     /// Request one image from the photo library.
@@ -569,14 +694,7 @@ final class PhotoKitService {
         contentMode: PHImageContentMode
     ) async -> UIImage? {
         guard let asset = fetchAsset(id: assetID) else { return nil }
-        let options = PHImageRequestOptions()
-        // Opportunistic delivery: PhotoKit may hand over a small, degraded
-        // image first and the good one a moment later. The box keeps the
-        // degraded one as a fallback and resumes on the good one, so a
-        // cell never shows a 100-pixel blur.
-        options.deliveryMode = .opportunistic
-        options.resizeMode = .fast
-        options.isNetworkAccessAllowed = true
+        let options = imageRequestOptions()
 
         let box = PhotoKitRequestBox()
         return await withTaskCancellationHandler {
@@ -606,3 +724,18 @@ final class PhotoKitService {
     }
 }
 
+/// Bridges PhotoKit's library-change callback into `PhotoKitService`.
+///
+/// A separate object because the service is `@MainActor @Observable`:
+/// the callback arrives off the main actor, and the bridge's one job is
+/// to hand the event to the service's main-actor task without carrying
+/// any `PHChange` state across with it (the service re-reads what it
+/// needs, which is simpler and always current).
+private final class PhotoKitLibraryChangeObserver: NSObject, PHPhotoLibraryChangeObserver {
+    /// Called on an arbitrary queue when the library changes.
+    var onChange: (() -> Void)?
+
+    func photoLibraryDidChange(_ changeInstance: PHChange) {
+        onChange?()
+    }
+}
