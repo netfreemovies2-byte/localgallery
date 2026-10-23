@@ -375,7 +375,7 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             SWIFT_COMPILATION_MODE=singlefile \
             SWIFT_OPTIMIZATION_LEVEL=-Onone \
-            OTHER_SWIFT_FLAGS="-Xfrontend -debug-time-function-bodies -Xfrontend -debug-time-compilation" \
+            OTHER_SWIFT_FLAGS="-debug-time-compilation -stats-output-dir $ROOT/build/swift-stats -Xfrontend -debug-time-function-bodies" \
             build > "$ROOT/xcodebuild-build.log" 2>&1 &
           XPID=$!
           ELAPSED=0
@@ -399,12 +399,43 @@ jobs:
           echo "xcodebuild exit code: $XC (124 = killed by the 15-minute time box)"
           echo "### Diagnostic compile exit code: $XC" >> "$GITHUB_STEP_SUMMARY"
           tail -n 60 "$ROOT/xcodebuild-build.log" || true
+          # Roll up the per-invocation -stats-output-dir JSON files into
+          # phase totals (AST / SILGen / SILOpt / IRGen / LLVM), so the
+          # artifact shows where completed compiler jobs spent their time
+          # even though the hanging job never writes its own stats file.
+          python3 - "$ROOT/build/swift-stats" > "$ROOT/swift-stats-summary.txt" 2>&1 << 'PYEOF' || true
+          import json, os, sys, collections
+          root = sys.argv[1]
+          totals = collections.Counter(); files = 0
+          per_inv = []
+          for dirpath, _, names in os.walk(root):
+              for n in names:
+                  if not n.endswith('.json'): continue
+                  try: d = json.load(open(os.path.join(dirpath, n)))
+                  except Exception: continue
+                  files += 1
+                  wall = 0.0
+                  for k, v in d.items():
+                      if k.startswith('Time.') and isinstance(v, (int, float)):
+                          totals[k] += v
+                          if k.endswith('.wall'): wall += v
+                  per_inv.append((wall, n))
+          print(f"stats files: {files}")
+          print("phase totals (seconds, summed across invocations):")
+          for k, v in totals.most_common(25): print(f"  {k}: {v:.2f}")
+          print("slowest invocations by summed phase wall time:")
+          for w, n in sorted(per_inv, reverse=True)[:15]: print(f"  {w:.2f}s  {n}")
+          PYEOF
+          cat "$ROOT/swift-stats-summary.txt" || true
 
       - name: Upload diagnostic build log
         if: always()
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         with:
           name: xcodebuild-diag-log
-          path: xcodebuild-build.log
+          path: |
+            xcodebuild-build.log
+            swift-stats-summary.txt
+            build/swift-stats
           if-no-files-found: warn
           retention-days: 14
