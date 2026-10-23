@@ -5,10 +5,11 @@ struct PhotoKitAlbum: Identifiable, Hashable, Sendable {
     /// The kind of album, which decides where it sits in the grid and
     /// which icon it gets.
     enum Kind: String, Hashable, Sendable {
-        /// "All assets" — the device's whole library.
-        case cameraRoll
-        /// "Recents".
-        case recents
+        /// Media captured by the device's own camera. A filtered view of
+        /// the library, not the whole library — see
+        /// `PhotoKitService.fetchAlbums()` for the exact rule and its
+        /// limits.
+        case camera
         case screenshots
         case videos
         case favorites
@@ -18,8 +19,7 @@ struct PhotoKitAlbum: Identifiable, Hashable, Sendable {
         /// SF Symbol for the album tile's placeholder.
         var iconName: String {
             switch self {
-            case .cameraRoll: return "camera.aperture"
-            case .recents: return "clock.arrow.circlepath"
+            case .camera: return "camera.aperture"
             case .screenshots: return "iphone.gen3"
             case .videos: return "play.rectangle"
             case .favorites: return "heart"
@@ -29,8 +29,8 @@ struct PhotoKitAlbum: Identifiable, Hashable, Sendable {
     }
 
     /// The collection's `localIdentifier`, or a synthetic id for the
-    /// Camera Roll — which is "all assets", not one collection, so it has
-    /// no identifier to fetch by.
+    /// Camera album — which is a filtered fetch, not one collection, so
+    /// it has no identifier to fetch by.
     let id: String
     let title: String
     let kind: Kind
