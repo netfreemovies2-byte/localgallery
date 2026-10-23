@@ -84,10 +84,10 @@ jobs:
       - name: Archive (unsigned, not exported)
         run: |
           xcodebuild archive \
-            -project LocalGallery.xcodeproj \
-            -scheme LocalGallery \
+            -project PixelPic.xcodeproj \
+            -scheme PixelPic \
             -destination "generic/platform=iOS" \
-            -archivePath build/LocalGallery.xcarchive \
+            -archivePath build/PixelPic.xcarchive \
             -resultBundlePath ArchiveResults.xcresult \
             CODE_SIGN_IDENTITY="" \
             CODE_SIGNING_REQUIRED=NO \
@@ -96,7 +96,7 @@ jobs:
 
       - name: Validate archive layout
         run: |
-          APP="build/LocalGallery.xcarchive/Products/Applications/LocalGallery.app"
+          APP="build/PixelPic.xcarchive/Products/Applications/PixelPic.app"
           [[ -d "${APP}" ]]
           [[ -f "${APP}/Info.plist" ]]
           # Fail if an IPA was produced — this workflow must not publish one.
