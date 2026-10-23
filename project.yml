@@ -105,11 +105,11 @@ targets:
             CFBundleURLSchemes:
               - localgallery
         NSContactsUsageDescription: "Pixel Pic uses your contacts to surface birthday memories for the people in your photos. Names are matched only against your photo tags — nothing leaves the device."
-        # The device's own Photos library (Camera Roll tab). Read-only in
+        # The device's own Photos library (the Albums gallery). Read-only in
         # practice: the app never writes to the library without an explicit
         # user action, so the add-access string exists only to satisfy the
         # system if that ever changes.
-        NSPhotoLibraryUsageDescription: "Pixel Pic shows the photos already on this device — your camera roll, screenshots and your own albums — so you can browse them alongside your folders. Nothing is uploaded and nothing leaves the device."
+        NSPhotoLibraryUsageDescription: "Pixel Pic shows the photos already on this device — your Camera, Screenshots and your own albums. Nothing is uploaded and nothing leaves the device."
         NSPhotoLibraryAddUsageDescription: "Pixel Pic only saves to your photo library when you explicitly ask it to. Nothing is added without your say-so."
         UIBackgroundModes:
           - fetch
