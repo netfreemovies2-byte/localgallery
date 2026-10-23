@@ -317,3 +317,36 @@ final class PhotoKitThumbnailCacheSeedTests: XCTestCase {
         )
     }
 }
+
+// MARK: - Resume guard: the video-play crash regression
+
+/// Regression coverage for the device-reproduced crash on Play
+/// (October 2026): `playerItemResult` resumed its continuation
+/// unguarded inside the `requestAVAsset` callback, and PhotoKit
+/// callbacks may fire more than once — a second resume of a checked
+/// continuation is a fatal runtime error. The path now claims a
+/// `ProbeResumeGuard` per delivery, first delivery wins; these
+/// tests pin the claim semantics that guarantee it.
+final class ProbeResumeGuardTests: XCTestCase {
+
+    func testFirstClaimWinsAndLaterClaimsLose() {
+        let guardBox = ProbeResumeGuard()
+        XCTAssertTrue(guardBox.claim(), "the first delivery must resume the continuation")
+        XCTAssertFalse(guardBox.claim(), "a second delivery must be dropped, not resumed")
+        XCTAssertFalse(guardBox.claim())
+    }
+
+    func testConcurrentClaimsHaveExactlyOneWinner() {
+        let guardBox = ProbeResumeGuard()
+        let lock = NSLock()
+        var winners = 0
+        DispatchQueue.concurrentPerform(iterations: 200) { _ in
+            if guardBox.claim() {
+                lock.lock()
+                winners += 1
+                lock.unlock()
+            }
+        }
+        XCTAssertEqual(winners, 1, "exactly one of many racing deliveries may resume")
+    }
+}
