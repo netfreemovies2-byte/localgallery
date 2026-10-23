@@ -80,6 +80,14 @@ struct PhotoKitPageView: View {
     /// must coalesce into ONE request, not race near-identical
     /// 2000 px decodes that supersede each other and leave the page
     /// waiting on the slowest — a device-reproduced black viewer.
+    /// Monotonic nonce for the *thumbnail* load only. It is separate
+    /// from `loadNonce` (the full-image load's) on purpose: the two
+    /// loads run concurrently by design, and sharing one nonce let
+    /// a full-load start invalidate the thumbnail's completion —
+    /// discarding the very image the page was waiting to show, and
+    /// chaining duplicate full loads behind it (device-reported
+    /// intermittent black viewer, October 2026).
+    @State private var thumbnailNonce = 0
     @State private var fullLoadNonce: Int?
     /// Why starting the video failed (load-level; playback-level
     /// failures arrive via `playbackState.playbackError`).
@@ -448,8 +456,8 @@ struct PhotoKitPageView: View {
         if thumbnail == nil, let seed = store.photoKit.cachedThumbnail(for: asset.id) {
             thumbnail = seed
         }
-        loadNonce += 1
-        let nonce = loadNonce
+        thumbnailNonce += 1
+        let nonce = thumbnailNonce
         let assetID = asset.id
         let image = await store.photoKit.thumbnail(
             for: assetID,
@@ -457,13 +465,13 @@ struct PhotoKitPageView: View {
             onDegraded: { degraded in
                 // A degraded preview beats an empty page while the
                 // full decode is still running.
-                guard loadNonce == nonce, loadedAssetID == assetID else { return }
+                guard thumbnailNonce == nonce, loadedAssetID == assetID else { return }
                 if thumbnail == nil {
                     thumbnail = degraded
                 }
             }
         )
-        guard loadNonce == nonce, loadedAssetID == assetID else { return }
+        guard thumbnailNonce == nonce, loadedAssetID == assetID else { return }
         if let image, thumbnail == nil {
             thumbnail = image
         }
