@@ -1069,7 +1069,7 @@ extension PhotoKitService {
         }
         guard let avAsset else { return nil }
         var evidence = CameraMetadataEvidence()
-        for format in [AVMetadataFormat.quickTimeMetadata, AVMetadataFormat.quickTime] {
+        for format in [AVMetadataFormat.quickTimeMetadata] {
             guard let items = try? await avAsset.loadMetadata(for: format) else { continue }
             for item in items {
                 let identifier = item.identifier?.rawValue.lowercased() ?? ""
